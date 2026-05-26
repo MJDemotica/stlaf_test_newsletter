@@ -351,6 +351,29 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
 
       {/* Desktop campaigns Table / List cards */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-sm">
+        {/* Table Header Controls */}
+        <div className="px-5 py-3 border-b border-slate-150 dark:border-slate-805 flex items-center justify-between bg-slate-50/50 dark:bg-slate-950/20">
+          <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Campaign List</span>
+          <button
+            type="button"
+            title={isBulkModeActive ? "Exit Selection Mode" : "Enable Bulk Selection"}
+            onClick={() => {
+              const nextMode = !isBulkModeActive;
+              setIsBulkModeActive(nextMode);
+              if (!nextMode) {
+                setSelectedCampaignIds([]);
+              }
+            }}
+            className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
+              isBulkModeActive
+                ? 'bg-amber-50 border-amber-400 text-amber-600 dark:bg-amber-950/20 dark:border-amber-500 dark:text-amber-400'
+                : 'bg-white border-slate-200 dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-350 hover:bg-slate-50 dark:hover:bg-slate-700'
+            }`}
+          >
+            <CheckSquare className="w-4 h-4" strokeWidth={2} />
+          </button>
+        </div>
+
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm whitespace-nowrap">
             <thead className="bg-slate-50 dark:bg-slate-950 text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider text-[11px] border-b border-slate-200 dark:border-slate-800">
@@ -370,29 +393,7 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
                     />
                   </th>
                 )}
-                <th className="px-6 py-4">
-                  <div className="flex items-center gap-2">
-                    <span>Title</span>
-                    <button
-                      onClick={() => {
-                        const nextMode = !isBulkModeActive;
-                        setIsBulkModeActive(nextMode);
-                        if (!nextMode) {
-                          setSelectedCampaignIds([]);
-                        }
-                      }}
-                      className={`inline-flex items-center justify-center p-1 rounded-md border transition-all cursor-pointer shadow-sm select-none ${
-                        isBulkModeActive
-                          ? 'bg-amber-50 border-amber-400 text-amber-600 dark:bg-amber-950/20 dark:border-amber-500 dark:text-amber-400 shadow-amber-100/30'
-                          : 'bg-white border-slate-200 dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-350 hover:bg-slate-50 dark:hover:bg-slate-700'
-                      }`}
-                      title="Toggle Bulk Edit Mode"
-                      style={{ width: '26px', height: '26px' }}
-                    >
-                      <CheckSquare className="w-4 h-4" strokeWidth={2} />
-                    </button>
-                  </div>
-                </th>
+                <th className="px-6 py-4">Title</th>
                 <th className="px-6 py-4">Category</th>
                 <th className="px-6 py-4">Status</th>
                 <th className="px-6 py-4">Filters</th>
