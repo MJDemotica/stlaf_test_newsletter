@@ -451,6 +451,57 @@ export const SubscribersView: React.FC = () => {
     return matchesFilter && matchesSearch;
   });
 
+  const handleClearSingleFeedback = async (id: string, name: string) => {
+    if (!window.confirm(`Are you sure you want to clear the feedback comments for ${name || 'this subscriber'}? This will set it back to "No reason specified".`)) return;
+    try {
+      await setDoc(doc(db, 'subscribers', id), {
+        unsubscribeReason: "No reason specified"
+      }, { merge: true });
+      toast.success("Feedback reason cleared!");
+    } catch (err: any) {
+      toast.error(`Clear reason failed: ${err.message}`);
+    }
+  };
+
+  const handleClearAllOptOutLogs = async (actionType: 'reasons' | 'delete') => {
+    if (filteredFeedback.length === 0) {
+      toast.error("No selected opt-out logs to clear.");
+      return;
+    }
+
+    const confirmMsg = actionType === 'delete'
+      ? `Are you sure you want to PERMANENTLY DELETE all ${filteredFeedback.length} filtered unsubscribed subscriber records? This action cannot be undone.`
+      : `Are you sure you want to reset feedback reasons for all ${filteredFeedback.length} filtered records? This will set their reasons to 'No reason specified'.`;
+
+    if (!window.confirm(confirmMsg)) return;
+
+    const toastId = toast.loading("Processing bulk logs update...");
+    try {
+      const batch = writeBatch(db);
+      filteredFeedback.forEach(s => {
+        if (actionType === 'delete') {
+          batch.delete(doc(db, 'subscribers', s.id));
+        } else {
+          batch.set(doc(db, 'subscribers', s.id), {
+            unsubscribeReason: "No reason specified"
+          }, { merge: true });
+        }
+      });
+      await batch.commit();
+      
+      await sendInAppNotification({
+        title: "Opt-Out Logs Cleared",
+        message: actionType === 'delete' 
+          ? `Bulk deleted ${filteredFeedback.length} unsubscribed contacts.` 
+          : `Bulk reset reasons for ${filteredFeedback.length} unsubscribed contacts.`,
+        type: "success"
+      });
+      toast.success("Successfully processed bulk logs update!", { id: toastId });
+    } catch (err: any) {
+      toast.error(`Clear failed: ${err.message}`, { id: toastId });
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex justify-end">
@@ -638,10 +689,28 @@ export const SubscribersView: React.FC = () => {
           {/* Log / Feedback listing and filters table */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-sm">
             <div className="px-5 py-4 border-b border-slate-205 dark:border-slate-805 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-slate-50/50 dark:bg-slate-950/20">
-              <h3 className="font-bold text-sm text-slate-950 dark:text-white flex items-center gap-1.5">
-                <MessageSquare className="w-4 h-4 text-amber-500" /> Detailed Customer Opt-Out Logs
+              <h3 className="font-bold text-sm text-slate-950 dark:text-white flex items-center gap-1.5 animate-pulse-subtle">
+                <MessageSquare className="w-4 h-4 text-amber-500 animate-bounce" style={{ animationDuration: '3s' }} /> Detailed Customer Opt-Out Logs
               </h3>
               <div className="flex flex-wrap items-center gap-2">
+                {filteredFeedback.length > 0 && (
+                  <div className="flex items-center gap-1.5 mr-2">
+                    <button
+                      onClick={() => handleClearAllOptOutLogs('reasons')}
+                      className="px-2.5 py-1.5 text-xs bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg font-semibold transition-all cursor-pointer flex items-center gap-1"
+                      title="Set all current filtered feedback reasons to 'No reason specified'"
+                    >
+                      <RefreshCw className="w-3 h-3" /> Clear reasons
+                    </button>
+                    <button
+                      onClick={() => handleClearAllOptOutLogs('delete')}
+                      className="px-2.5 py-1.5 text-xs bg-rose-50 text-rose-600 hover:bg-rose-100 dark:bg-rose-955/20 dark:text-rose-400 dark:hover:bg-rose-955/35 rounded-lg font-semibold transition-all cursor-pointer flex items-center gap-1"
+                      title="Delete all current filtered unsubscribed subscriber records completely"
+                    >
+                      <Trash2 className="w-3 h-3" /> Delete records
+                    </button>
+                  </div>
+                )}
                 <div className="relative">
                   <input
                     type="text"
@@ -677,12 +746,13 @@ export const SubscribersView: React.FC = () => {
                     <th className="px-6 py-4">Target Email</th>
                     <th className="px-6 py-4">Opt-Out Date</th>
                     <th className="px-6 py-4">Option Chosen / Reason</th>
+                    <th className="px-6 py-4 text-center">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-150 dark:divide-slate-800 text-slate-700 dark:text-slate-300">
                   {filteredFeedback.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="px-6 py-12 text-center text-slate-400 text-xs">
+                      <td colSpan={5} className="px-6 py-12 text-center text-slate-400 text-xs">
                         No customer opt-out logs match your criteria.
                       </td>
                     </tr>
@@ -711,6 +781,24 @@ export const SubscribersView: React.FC = () => {
                           }`}>
                             {sub.unsubscribeReason || "No reason specified"}
                           </span>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              onClick={() => handleClearSingleFeedback(sub.id, sub.name)}
+                              className="p-1 px-2 text-xs font-semibold text-slate-500 hover:text-amber-600 bg-slate-50 hover:bg-amber-50 dark:bg-slate-950 dark:hover:bg-amber-955/20 rounded-lg border border-slate-200 dark:border-slate-800 transition-all flex items-center gap-1 cursor-pointer"
+                              title="Clear feedback content (resets to 'No reason specified')"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" /> Clear Feedback
+                            </button>
+                            <button
+                              onClick={() => handleDelete(sub.id)}
+                              className="p-1 px-2 text-xs font-semibold text-red-500 hover:text-white bg-red-50 hover:bg-red-500 dark:bg-slate-950 dark:hover:bg-red-950/40 rounded-lg border border-red-200 dark:border-red-900/30 transition-all flex items-center gap-1 cursor-pointer"
+                              title="Permanently delete subscriber record"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" /> Delete
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))

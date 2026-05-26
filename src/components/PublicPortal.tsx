@@ -276,26 +276,6 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({ mode }) => {
                   </p>
                 </div>
 
-                {devVerificationUrl && (
-                  <div className="mt-4 p-4 rounded-xl bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/60 text-left space-y-2">
-                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-400">
-                      <Fingerprint className="w-3 h-3" /> Developer Sandbox
-                    </span>
-                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-normal">
-                      {!emailSent 
-                        ? "Admin Note: Gmail is not yet configured or authorised. Use the sandbox shortcut below to manually complete the double opt-in verification cycle without wait:" 
-                        : "For convenience in development, you can also use this link to complete the verification simulation:"
-                      }
-                    </p>
-                    <a
-                      href={devVerificationUrl}
-                      className="inline-flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 font-bold underline hover:text-amber-700 break-all"
-                    >
-                      Verify Subscription Manually &rarr;
-                    </a>
-                  </div>
-                )}
-
                 <div className="pt-6 border-t border-slate-100 dark:border-slate-800">
                   <p className="text-xs text-slate-400">Unverified subscriptions automatically expire and are cleared from the queue after 24 hours.</p>
                 </div>
