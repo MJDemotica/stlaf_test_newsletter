@@ -59,11 +59,19 @@ function fromFirestoreJSON(doc) {
   return obj;
 }
 
+let cachedGmailConfig = null;
+let lastGmailConfigFetch = 0;
+
 async function getGmailConfig() {
+  if (cachedGmailConfig && Date.now() - lastGmailConfigFetch < 300000) {
+    return cachedGmailConfig;
+  }
   const url = `${getFirestoreUrl()}/settings/gmail_config${getApiKeyParam()}`;
   try {
     const resp = await axios.get(url);
-    return fromFirestoreJSON(resp.data);
+    cachedGmailConfig = fromFirestoreJSON(resp.data);
+    lastGmailConfigFetch = Date.now();
+    return cachedGmailConfig;
   } catch (err) {
     if (err.response?.status === 404) {
       return { connected: false };
@@ -80,6 +88,8 @@ async function saveGmailConfig(config) {
   const docData = toFirestoreJSON(config);
   try {
     await axios.patch(url, docData);
+    cachedGmailConfig = Object.assign({}, cachedGmailConfig || {}, config);
+    lastGmailConfigFetch = Date.now();
   } catch (err) {
     console.error("Error saving Gmail config to Firestore REST:", err.response?.data || err.message);
     throw err;

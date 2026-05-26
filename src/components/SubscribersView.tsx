@@ -997,7 +997,7 @@ export const SubscribersView: React.FC = () => {
                 <input
                   type="text"
                   required
-                  placeholder="John Doe"
+                  placeholder="Juan Dela Cruz"
                   value={subName}
                   onChange={(e) => setSubName(e.target.value)}
                   className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent text-slate-950 dark:text-white"
@@ -1009,7 +1009,7 @@ export const SubscribersView: React.FC = () => {
                 <input
                   type="email"
                   required
-                  placeholder="john.doe@example.com"
+                  placeholder="juandelacruz@example.com"
                   value={subEmail}
                   onChange={(e) => setSubEmail(e.target.value)}
                   className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent text-slate-950 dark:text-white"

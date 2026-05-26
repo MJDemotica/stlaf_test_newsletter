@@ -92,11 +92,19 @@ async function startServer() {
     return apiKey ? `?key=${apiKey}` : "";
   }
 
+  let cachedGmailConfig: any = null;
+  let lastGmailConfigFetch = 0;
+
   async function getGmailConfig(): Promise<any> {
+    if (cachedGmailConfig && Date.now() - lastGmailConfigFetch < 300000) {
+      return cachedGmailConfig;
+    }
     const url = `${getFirestoreUrl()}/settings/gmail_config${getApiKeyParam()}`;
     try {
       const resp = await axios.get(url);
-      return fromFirestoreJSON(resp.data);
+      cachedGmailConfig = fromFirestoreJSON(resp.data);
+      lastGmailConfigFetch = Date.now();
+      return cachedGmailConfig;
     } catch (err: any) {
       if (err.response?.status === 404) {
         return { connected: false };
@@ -113,6 +121,8 @@ async function startServer() {
     const docData = toFirestoreJSON(config);
     try {
       await axios.patch(url, docData);
+      cachedGmailConfig = Object.assign({}, cachedGmailConfig || {}, config);
+      lastGmailConfigFetch = Date.now();
     } catch (err: any) {
       console.error("Error saving Gmail config to Firestore REST:", err.response?.data || err.message);
       throw err;
@@ -747,7 +757,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/public/unsubscribe", async (req, res) => {
+  app.post("/api-public-unsubscribe", async (req, res) => {
     const { email, reason } = req.body;
     if (!email) {
       return res.status(400).json({ success: false, error: "Email is required" });
@@ -1023,19 +1033,23 @@ async function startServer() {
     }
   }
 
-  // Start periodic scheduler checks & subscriber cleanups
+  // Start periodic scheduler checks (every 60 seconds)
   setInterval(async () => {
     try {
       await checkAndSendScheduledCampaigns();
     } catch (e: any) {
       console.error("[SCHEDULER INTERVAL ERR] Error in scheduled run:", e.message);
     }
+  }, 60000);
+
+  // Background subscriber cleanup (every 10 minutes)
+  setInterval(async () => {
     try {
       await cleanExpiredPendingSubscribers();
     } catch (e: any) {
       console.error("[SCHEDULER CLEANER ERR] Error in background subscriber cleanup:", e.message);
     }
-  }, 15000); // Trigger check and cleanup every 15 seconds for hot updates!
+  }, 600000);
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {

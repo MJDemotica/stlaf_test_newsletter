@@ -116,7 +116,7 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({ mode }) => {
     const finalReason = reason === "Other (please specify)" ? `Other: ${otherReasonText}` : reason;
 
     try {
-      const resp = await axios.post('/api/public/unsubscribe', {
+      const resp = await axios.post('/api-public-unsubscribe', {
         email,
         reason: finalReason
       });
@@ -358,7 +358,7 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({ mode }) => {
                   <input
                     type="text"
                     required
-                    placeholder="E.g., John Doe"
+                    placeholder="E.g., Juan Dela Cruz"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 transition-all font-sans text-sm"
@@ -372,7 +372,7 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({ mode }) => {
                   <input
                     type="email"
                     required
-                    placeholder="john@example.com"
+                    placeholder="juandelacruz@example.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 transition-all font-sans text-sm"
