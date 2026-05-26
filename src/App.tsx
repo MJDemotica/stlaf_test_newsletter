@@ -191,6 +191,54 @@ function AppContent() {
               const caption = postData.caption || postData.body || '';
               const creatives = postData.creatives || [];
 
+              // Helper to extract a readable date
+              let postDateStr = '';
+              const candidates = [
+                postData.scheduledDate,
+                postData.publishDate,
+                postData.date,
+                postData.scheduledTime,
+                postData.createdAt,
+                postData.updatedAt
+              ];
+              for (const f of candidates) {
+                if (!f) continue;
+                let dateObj: Date | null = null;
+                if (typeof f.toDate === 'function') {
+                  dateObj = f.toDate();
+                } else if (f.seconds !== undefined) {
+                  dateObj = new Date(f.seconds * 1000);
+                } else {
+                  const parsed = new Date(f);
+                  if (!isNaN(parsed.getTime())) {
+                    dateObj = parsed;
+                  }
+                }
+                if (dateObj) {
+                  try {
+                    postDateStr = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                    break;
+                  } catch (e) {
+                    // fallthrough
+                  }
+                }
+              }
+              if (!postDateStr) {
+                try {
+                  postDateStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                } catch (e) {
+                  postDateStr = 'Today';
+                }
+              }
+
+              // Prepend Date to Campaign Title (e.g., "May 1 - Jurisprudence")
+              const finalCampaignTitle = `${postDateStr} - ${contentTitle}`;
+
+              // Extract 1st non-empty line as 1st sentence of caption for campaign subject line
+              const captionLines = caption.split('\n').map((l: string) => l.trim()).filter(Boolean);
+              const firstLine = captionLines[0] || '';
+              const finalEmailSubject = firstLine || contentTitle;
+
               // Convert any graphics from the creatives list into accessible attachments and inline images
               const attachmentsList: any[] = [];
               let firstImgUrl = '';
@@ -219,8 +267,8 @@ function AppContent() {
               }
 
               const mappedCampaign = {
-                title: contentTitle,
-                subject: contentTitle, // Set extracted Content Title as Email Subject
+                title: finalCampaignTitle,
+                subject: finalEmailSubject, 
                 body: emailBody,
                 status: 'draft',
                 type: 'Newsletter',
