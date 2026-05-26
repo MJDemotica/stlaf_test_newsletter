@@ -16,9 +16,11 @@ import {
   HelpCircle,
   Clock,
   X,
-  Play
+  Play,
+  CheckSquare
 } from 'lucide-react';
-import { collection, onSnapshot, deleteDoc, doc, addDoc } from 'firebase/firestore';
+import { collection, onSnapshot, deleteDoc, doc, addDoc, updateDoc } from 'firebase/firestore';
+import { motion, AnimatePresence } from 'motion/react';
 import { db, auth } from '../firebase';
 import { EmailCampaign } from '../types';
 import { toast } from 'react-hot-toast';
@@ -34,6 +36,8 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCampaign, setSelectedCampaign] = useState<EmailCampaign | null>(null);
   const [loading, setLoading] = useState(true);
+  const [selectedCampaignIds, setSelectedCampaignIds] = useState<string[]>([]);
+  const [isBulkModeActive, setIsBulkModeActive] = useState(false);
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'emailCampaigns'), (snapshot) => {
@@ -56,6 +60,7 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
     if (!window.confirm("Are you sure you want to delete this campaign permanently?")) return;
     try {
       await deleteDoc(doc(db, 'emailCampaigns', campaignId));
+      setSelectedCampaignIds(prev => prev.filter(id => id !== campaignId));
       toast.success("Campaign deleted");
     } catch (e: any) {
       toast.error(`Error deleting: ${e.message}`);
@@ -83,21 +88,123 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
     }
   };
 
+  const handleBulkDelete = async () => {
+    if (selectedCampaignIds.length === 0) return;
+    if (!window.confirm(`Are you sure you want to delete the ${selectedCampaignIds.length} selected campaigns permanently?`)) return;
+
+    const loadingToast = toast.loading(`Deleting ${selectedCampaignIds.length} campaigns...`);
+    try {
+      await Promise.all(selectedCampaignIds.map(id => deleteDoc(doc(db, 'emailCampaigns', id))));
+      setSelectedCampaignIds([]);
+      toast.success("Selected campaigns deleted successfully", { id: loadingToast });
+    } catch (e: any) {
+      toast.error(`Bulk delete failed: ${e.message}`, { id: loadingToast });
+    }
+  };
+
+  const handleBulkDuplicate = async () => {
+    if (selectedCampaignIds.length === 0) return;
+    if (!window.confirm(`Duplicate ${selectedCampaignIds.length} selected campaigns into drafts?`)) return;
+
+    const loadingToast = toast.loading(`Duplicating ${selectedCampaignIds.length} campaigns...`);
+    try {
+      const selectedList = campaigns.filter(c => selectedCampaignIds.includes(c.id));
+      await Promise.all(selectedList.map(campaign => {
+        const duplicated: Omit<EmailCampaign, 'id'> = {
+          title: `${campaign.title} (Copy)`,
+          subject: campaign.subject,
+          body: campaign.body,
+          status: 'draft',
+          type: campaign.type,
+          recipientTags: Array.isArray(campaign.recipientTags) ? campaign.recipientTags : [],
+          sentCount: 0,
+          failedCount: 0,
+          createdBy: auth.currentUser?.email || 'System',
+          createdAt: new Date().toISOString()
+        };
+        return addDoc(collection(db, 'emailCampaigns'), duplicated);
+      }));
+      setSelectedCampaignIds([]);
+      toast.success(`Successfully duplicated ${selectedList.length} campaigns!`, { id: loadingToast });
+    } catch (e: any) {
+      toast.error(`Bulk duplicate failed: ${e.message}`, { id: loadingToast });
+    }
+  };
+
+  const handleBulkStatusChange = async (newStatus: 'draft' | 'sent' | 'scheduled') => {
+    if (selectedCampaignIds.length === 0) return;
+    const loadingToast = toast.loading(`Updating ${selectedCampaignIds.length} campaigns to ${newStatus}...`);
+    try {
+      await Promise.all(selectedCampaignIds.map(id => {
+        const payload: any = { status: newStatus };
+        if (newStatus === 'sent') {
+          payload.sentAt = new Date().toISOString();
+        }
+        return updateDoc(doc(db, 'emailCampaigns', id), payload);
+      }));
+      setSelectedCampaignIds([]);
+      toast.success(`Updated status to ${newStatus}!`, { id: loadingToast });
+    } catch (e: any) {
+      toast.error(`Failed to update status: ${e.message}`, { id: loadingToast });
+    }
+  };
+
   const filteredCampaigns = campaigns.filter(c => 
     c.title?.toLowerCase().includes(searchQuery.toLowerCase()) || 
     c.subject?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     c.type?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  const toggleSelectAll = () => {
+    const visibleIds = filteredCampaigns.map(c => c.id);
+    const allVisibleSelected = visibleIds.every(id => selectedCampaignIds.includes(id));
+    if (allVisibleSelected) {
+      setSelectedCampaignIds(prev => prev.filter(id => !visibleIds.includes(id)));
+    } else {
+      setSelectedCampaignIds(prev => {
+        const union = new Set([...prev, ...visibleIds]);
+        return Array.from(union);
+      });
+    }
+  };
+
+  const isAllVisibleSelected = filteredCampaigns.length > 0 && filteredCampaigns.map(c => c.id).every(id => selectedCampaignIds.includes(id));
+  const isAnyVisibleSelected = filteredCampaigns.length > 0 && filteredCampaigns.map(c => c.id).some(id => selectedCampaignIds.includes(id));
+
   return (
     <div className="space-y-6">
-      <div className="flex justify-end">
-        <button
-          onClick={() => onNavigate('compose')}
-          className="flex items-center justify-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white font-semibold rounded-lg text-sm shadow transition-all"
-        >
-          <Plus className="w-4 h-4" /> Create Campaign
-        </button>
+      <div className="flex justify-between items-center bg-transparent">
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">Email Campaigns</h2>
+          {/* Toggle Bulk Edit Mode Button */}
+          <button
+            onClick={() => {
+              const nextMode = !isBulkModeActive;
+              setIsBulkModeActive(nextMode);
+              if (!nextMode) {
+                setSelectedCampaignIds([]);
+              }
+            }}
+            className={`flex items-center justify-center p-2 rounded-[14px] border transition-all cursor-pointer shadow-sm select-none ${
+              isBulkModeActive
+                ? 'bg-amber-50 border-amber-400 text-amber-600 dark:bg-amber-950/20 dark:border-amber-500 dark:text-amber-400 shadow-amber-100/30'
+                : 'bg-white border-slate-200 dark:bg-slate-900 dark:border-slate-800 text-slate-700 dark:text-slate-350 hover:bg-slate-50/50 dark:hover:bg-slate-800/50 shadow-slate-100/10'
+            }`}
+            title="Toggle Bulk Edit Mode"
+            style={{ width: '42px', height: '42px' }}
+          >
+            <CheckSquare className="w-5 h-5" strokeWidth={2} />
+          </button>
+        </div>
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={() => onNavigate('compose')}
+            className="flex items-center justify-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white font-semibold rounded-lg text-sm shadow transition-all"
+            style={{ height: '42px' }}
+          >
+            <Plus className="w-4 h-4" /> Create Campaign
+          </button>
+        </div>
       </div>
 
       {/* Filter Row */}
@@ -114,12 +221,102 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
         </div>
       </div>
 
+      {/* Bulk Actions Bar */}
+      <AnimatePresence>
+        {isBulkModeActive && selectedCampaignIds.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, height: 0, y: -10 }}
+            animate={{ opacity: 1, height: 'auto', y: 0 }}
+            exit={{ opacity: 0, height: 0, y: -10 }}
+            className="overflow-hidden"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-4 bg-amber-500/10 dark:bg-amber-500/5 border border-amber-500/30 rounded-xl p-4 shadow-sm">
+              <div className="flex items-center gap-2">
+                <span className="bg-amber-500 text-white font-bold p-1 px-2.5 rounded-lg text-xs leading-none">
+                  {selectedCampaignIds.length}
+                </span>
+                <p className="text-sm text-slate-700 dark:text-slate-300 font-medium">
+                  campaigns selected from the list
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <button
+                  onClick={handleBulkDuplicate}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-500 text-indigo-600 dark:text-indigo-400 font-semibold rounded-lg text-xs transition-colors cursor-pointer"
+                >
+                  <Copy className="w-3.5 h-3.5" /> Duplicate Copies
+                </button>
+
+                <div className="relative group">
+                  <button
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-amber-500 text-slate-700 dark:text-slate-300 font-semibold rounded-lg text-xs transition-colors"
+                  >
+                    <Clock className="w-3.5 h-3.5" /> Mark Status...
+                  </button>
+                  <div className="absolute right-0 mt-1 w-36 bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 rounded-lg shadow-lg py-1 hidden group-hover:block hover:block z-20">
+                    <button
+                      onClick={() => handleBulkStatusChange('draft')}
+                      className="w-full text-left px-3 py-1.5 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 font-medium cursor-pointer"
+                    >
+                      Draft
+                    </button>
+                    <button
+                      onClick={() => handleBulkStatusChange('sent')}
+                      className="w-full text-left px-3 py-1.5 text-xs text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/20 font-medium cursor-pointer"
+                    >
+                      Sent
+                    </button>
+                    <button
+                      onClick={() => handleBulkStatusChange('scheduled')}
+                      className="w-full text-left px-3 py-1.5 text-xs text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/20 font-medium cursor-pointer"
+                    >
+                      Scheduled
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleBulkDelete}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 hover:bg-red-100 dark:bg-red-950/10 dark:hover:bg-red-950/20 text-red-600 dark:text-red-400 font-bold rounded-lg text-xs transition-colors cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" /> Delete Permanently
+                </button>
+
+                <button
+                  onClick={() => setSelectedCampaignIds([])}
+                  className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-350 transition-colors cursor-pointer"
+                  title="Clear choice"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Desktop campaigns Table / List cards */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm whitespace-nowrap">
             <thead className="bg-slate-50 dark:bg-slate-950 text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider text-[11px] border-b border-slate-200 dark:border-slate-800">
               <tr>
+                {isBulkModeActive && (
+                  <th className="px-6 py-4 w-12">
+                    <input
+                      type="checkbox"
+                      checked={isAllVisibleSelected}
+                      ref={el => {
+                        if (el) {
+                          el.indeterminate = isAnyVisibleSelected && !isAllVisibleSelected;
+                        }
+                      }}
+                      onChange={toggleSelectAll}
+                      className="rounded border-slate-300 dark:border-slate-700 text-amber-500 focus:ring-amber-500 cursor-pointer"
+                    />
+                  </th>
+                )}
                 <th className="px-6 py-4">Title</th>
                 <th className="px-6 py-4">Category</th>
                 <th className="px-6 py-4">Status</th>
@@ -132,11 +329,11 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
             <tbody className="divide-y divide-slate-150 dark:divide-slate-800 text-slate-700 dark:text-slate-300">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center text-slate-400">Loading campaign list...</td>
+                  <td colSpan={isBulkModeActive ? 8 : 7} className="px-6 py-12 text-center text-slate-400">Loading campaign list...</td>
                 </tr>
               ) : filteredCampaigns.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center text-slate-400">No campaigns found matching search criteria.</td>
+                  <td colSpan={isBulkModeActive ? 8 : 7} className="px-6 py-12 text-center text-slate-400">No campaigns found matching search criteria.</td>
                 </tr>
               ) : (
                 filteredCampaigns.map((campaign) => (
@@ -151,6 +348,22 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
                       }
                     }}
                   >
+                    {isBulkModeActive && (
+                      <td className="px-6 py-4 w-12" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selectedCampaignIds.includes(campaign.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedCampaignIds(prev => [...prev, campaign.id]);
+                            } else {
+                              setSelectedCampaignIds(prev => prev.filter(id => id !== campaign.id));
+                            }
+                          }}
+                          className="rounded border-slate-300 dark:border-slate-700 text-amber-500 focus:ring-amber-500 cursor-pointer"
+                        />
+                      </td>
+                    )}
                     <td className="px-6 py-4 font-semibold text-slate-900 dark:text-white">
                       <div className="flex flex-col">
                         <span>{campaign.title}</span>
