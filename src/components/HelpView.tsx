@@ -7,7 +7,6 @@ import {
   Calendar, 
   Sparkles, 
   ShieldCheck, 
-  Facebook,
   CheckCircle2,
   ChevronRight,
   AlertCircle,
@@ -16,7 +15,9 @@ import {
   User,
   Shield,
   Trash2,
-  X
+  X,
+  Mail,
+  Users
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { addDoc, collection, serverTimestamp, query, where, orderBy, onSnapshot, doc, updateDoc, arrayUnion, deleteDoc } from 'firebase/firestore';
@@ -133,164 +134,82 @@ export const HelpView: React.FC<HelpViewProps> = ({ userEmail, displayName, user
     {
       title: "Getting Started",
       icon: <CheckCircle2 className="w-5 h-5 text-sky-500" />,
-      content: "Learn the foundational steps to navigate the platform, from your first login to configuring your workspace for success.",
-      longContent: "Welcome to the Marketing Operations Portal. To get started, ensure you are logged in using your authorized organizational email. The navigation sidebar allows you to jump between the Content Planner (main hub), the Social Hub (history & metrics), and your Personal Profile. For administrators, the Admin Tab is the central place to configure API integrations and manage team roles.",
+      content: "Learn the foundational steps to navigate the Newsletter and Subscriber Portal, from authenticating your Gmail workspace to building target lists.",
+      longContent: "Welcome to the Email Marketing & Subscriber Portal! This system allows your squad to manage marketing contacts, draft stunning newsletter campaigns, harness Google Gemini AI for smart copy optimization, and execute highly targeted broadcasts securely through active Gmail integrations. All status records, double opt-in logs, and GDPR consent events are synchronized in Google Firestore.",
       topics: [
         {
-          title: "Initial Login",
-          content: "1. Access the portal via the provided URL.\n2. Log in using your registered Firebase Authentication credentials.\n3. Upon entry, you'll be directed to the 'Month' view of the Planner by default, showing the current month's campaign activities."
+          title: "Initial Dashboard Navigation",
+          content: "Upon entering the platform, your primary landing page is the Email Mailer Dashboard. This page visualizes:\n\n• Key Stats: Instantly look up total Active Subscribers, pending (Double Opt-In) subscribers, available HTML Templates, and launched campaigns.\n• Quick Actions: One-click redirects to Compose a new Campaign, review template directories, or manage list entries.\n• Analytics Feed: Historical charts and feedback matrices mapping active subscribers versus unsubscribes."
         },
         {
-          title: "Navigation 101",
-          content: "• Sidebar: Toggle between planning views and administrative tools.\n• Search Bar: Locate specific content titles or topics across the entire database.\n• Role Dashboard: In the top right, you can see your current role and sign out.\n• Theme Toggle: Switch between Light and Dark mode based on your preference."
+          title: "The Main Modules",
+          content: "Use the persistent sidebar to easily toggle between functional modules:\n\n• Compose Campaign: Design, filter, and queue your newsletters.\n• Campaigns: Manage Scheduled, active, and Draft campaigns.\n• Subscribers: Search, tags configuration, CSV imports, and unsubscribe audits.\n• Templates: Custom save and load modular HTML templates.\n• Sent History: Direct delivery audit logs with detailed status receipts."
         },
         {
-          title: "Profile Setup",
-          content: "Visit your User Settings to set your display name and check your permissions. If you are a supervisor, ensure you have configured the 'Governance' settings in the Admin tab to enable or disable deletion approvals."
+          title: "Custom Theme Settings",
+          content: "Switch between clean, high-contrast light or dark user themes natively dynamically in the sidebar. For corporate governance logs, ensure your team profile variables under 'My Profile' are set up correctly."
         }
       ],
       color: "bg-sky-50 dark:bg-sky-900/20"
     },
     {
-      title: "Content Planning",
-      icon: <Calendar className="w-5 h-5 text-indigo-500" />,
-      content: "Organize your social media strategy using multiple view modes. Track content from ideation to final publication.",
-      longContent: "The Content Planner is where most of your work happens. It allows for high-level visualization and granular control over every piece of digital content being produced.",
+      title: "Campaign Management",
+      icon: <Mail className="w-5 h-5 text-indigo-500" />,
+      content: "Discover how to compose professional HTML marketing campaigns, target filtered contact segments, and configure instant or scheduled deliveries.",
+      longContent: "The campaign composer is equipped with robust drag-selection templates, tag target configurations, and real-time email preview grids.",
       topics: [
         {
-          title: "Switching View Modes",
-          content: "Use the view switcher at the top of the Planner to alternate between:\n\n• Table View: Best for batch editing and viewing dense data (captions, links, notes).\n• Kanban Board: Visualizes the pipeline. Drag cards between 'Not Started', 'In Progress', 'For Review', 'Approved', 'Scheduled', and 'Published'.\n• Month View: A traditional calendar grid for checking campaign spacing and deadlines."
+          title: "Designing & Editing Campaigns",
+          content: "1. Navigate to 'Compose Campaign'.\n2. Provide a compelling 'Subject Line' and input your content body.\n3. Leverage inline dynamic formatting (HTML tables, margins, styled buttons).\n4. Choose a base template under the 'Select Template' menu to instantly insert modular boilerplate structures."
         },
         {
-          title: "Creating a Post",
-          content: "1. Click the 'Create New' button or click on a specific date in the Calendar/Table.\n2. Fill in the 'Content Title' (this is the internal identifier).\n3. Set the 'Topic/Theme' and choose from predefined 'Content Types' (e.g., Reel, Carousel, Photo).\n4. Assign a 'Format' and 'Objective' (Awareness, Conversion, etc.) to help with sorting and reporting."
+          title: "Personalized Merge Variables",
+          content: "Add a personal touch to maximize engagement! You can inject automated dynamic variables in both the subject line and email body:\n\n• Use `{{name}}` to dynamically insert the recipient's recorded display name.\n• Use `{{email}}` to output their registered email address."
         },
         {
-          title: "Collaboration & Attachments",
-          content: "Inside each post editor, you can upload 'Deliverables'. These are the actual media files (images/videos) that will be posted. Creative team members can upload files, and Supervisors can review them directly from the panel. You can also add 'Internal Notes' for team-only communication that won't be published."
+          title: "Recipient Target Segmentation",
+          content: "You can filter your broadcast targets precisely:\n\n• Filter by Tags: Select one or more target tag groups (e.g., 'IT Interns', 'Newsletter List'). Only contacts that have at least one matching checked tag will be included.\n• Broadcast to All: Deselect or clear all checked tags to target ALL verified active email subscribers in your database.\n• Preview Contacts: Toggle the slide-out target recipient drawer to verify the exact names and email list matching your current query before dispatching."
         }
       ],
       color: "bg-indigo-50 dark:bg-indigo-900/20"
     },
     {
-      title: "AI Generation",
-      icon: <Sparkles className="w-5 h-5 text-amber-500" />,
-      content: "When editing a post, use the 'AI Magic' sidebar to generate catchy captions. You can provide a topic and select the desired tone to get AI-powered results.",
-      longContent: "Powered by Gemini, the AI Magic engine understands your campaign's context to generate multiple variations of social media captions based on your topic and chosen tone.",
+      title: "Subscribers & Double Opt-In",
+      icon: <Users className="w-5 h-5 text-blue-500" />,
+      content: "Maintain complete GDPR compliance. Oversee subscriber tags, double opt-in pipelines, and granular unsubscribe feedback logs.",
+      longContent: "Data security and absolute compliance are core to the portal's design. Learn how subscriptions flow safely from registration to verification.",
       topics: [
         {
-          title: "Overview",
-          content: "The AI Magic engine, powered by Gemini, helps you brainstorm and generate high-quality captions tailored to your audience. It takes the heavy lifting out of copywriting by offering variations based on your chosen tone and topic."
+          title: "Subscriber Double Opt-In Workflow",
+          content: "All standard self-registrations trigger a strict verification validation cycle:\n\n1. A customer inputs their name, email, and tags selection on the portal.\n2. Their initial document is saved in Firestore under status: 'Pending Verification'.\n3. An elegant layout 'Confirmation Email' is sent with a unique token valid for 24 hours.\n4. Once the link is clicked, status transitions to 'Active', and they are eligible for campaigns. Unverified expired profiles are auto-cleaned."
         },
         {
-          title: "How to use it?",
-          content: "There are two ways to access the AI Magic tool from the Planner:\n\n1. From the Captions Column: Hover over the caption cell of any post and click the 'Sparkles' (✨) icon to instantly open the AI Generation sidebar.\n2. From the Actions Column: Click the 'Edit' (pencil) icon to open the post editor, then locate the 'AI Magic' section in the right sidebar.\n\nOnce open:\n3. Type your main topic or idea into the 'Topic' text field.\n4. Select a preferred 'Tone' (e.g., Professional, Playful, FOMO, Educational) to set the mood.\n5. Click the 'Click to generate' button.\n6. The AI will provide several caption options. You can easily click on one to insert it into your post's caption field.",
-          images: [
-            { url: captionImg, alt: "Accessing from the Captions Column", caption: "Accessing from the Captions Column" },
-            { url: editPoImg, alt: "Accessing from the Actions Column", caption: "Accessing from the Actions Column" }
-          ]
+          title: "Managing Contact Lists",
+          content: "Under the 'Subscribers' tab, you can search profiles by name or email, manually create contacts, assign tags, or bulk-import databases using the structured 'Import CSV' option. Note that campaigns will only ever be delivered to verified, active subscribers."
         },
         {
-          title: "Usage Limits",
-          content: "To ensure fair usage and maintain system performance, there is a global limit of 20 AI generations per day across the entire application. This limit automatically resets at midnight every day. If the application reaches this limit, you will need to wait until the next day to generate more captions."
-        }
-      ],
-      color: "bg-amber-50 dark:bg-amber-900/20"
-    },
-    {
-      title: "Facebook Integration",
-      icon: <Facebook className="w-5 h-5 text-blue-500" />,
-      content: "Connect your Facebook Page and Instagram Business account through the Meta Settings in the Dashboard. Once connected, you can publish or schedule posts directly to your social pages from the Planner.",
-      longContent: `Direct Meta API integration allows you to sync your marketing efforts across Facebook and Instagram seamlessly.`,
-      topics: [
-        {
-          title: "Overview",
-          content: "Direct Meta API integration allows you to sync your marketing efforts across Facebook and Instagram seamlessly. When a post is marked as 'Published' or 'Scheduled', the system communicates with Meta's Graph API to post to the appropriate channels. The portal also tracks 'Linked Content', helping you maintain a consistent brand voice across all platforms."
-        },
-        {
-          title: "How does it work?",
-          content: "The system connects directly to Meta's Graph API using a Long-Lived Page Access Token. When you trigger an action in the application, such as publishing or scheduling a post, the app translates those actions into API calls.\n\nFor Facebook: Posts and attachments are formatted and sent to the Facebook Page's feed endpoints.\nFor Instagram: Posts are assembled first into \"Media Containers\" which Meta validates, then these containers are \"published\" to the connected Instagram Business account.\n\nAuthentication happens server-side, meaning once set up, no ongoing user authentication prompts are required to post."
-        },
-        {
-          title: "How to use it?",
-          content: "1. Create a Post in the Planner\n2. Add your captions and media (note: Instagram requires at least one image or video).\n3. Click 'Publish Now' or 'Schedule' in the post details panel.\n4. Select 'Facebook Page', 'Instagram Business', or both to publish the content.\n5. Wait for the success response. The Social Hub will also track its history."
-        },
-        {
-          title: "Setup Guide",
-          content: `Here is a step-by-step guide to connect this web app to your Facebook Page and Instagram Business Account:
-
-1. Create a Meta Developer App
-   - Go to developers.facebook.com and log in with your Facebook account.
-   - Click "My Apps" -> "Create App".
-   - Select "Other" -> "Business" (or whatever corresponds to API access) as the app type.
-   - Enter your App Name and contact email, and click "Create App".
-
-2. Set Up Permissions & Graph API
-   - In your app dashboard, add the "Facebook Login for Business" product if prompted, or directly use the Graph API Explorer (Tools -> Graph API Explorer).
-   - Select your Facebook App. Under "Permissions", add the following:
-     • pages_show_list
-     • pages_read_engagement
-     • pages_manage_posts
-     • instagram_basic
-     • instagram_content_publish
-   - Click "Generate Access Token" and log in to authorize your account. Ensure you select the specific Page(s) and Instagram account(s) you want to manage.
-
-3. Obtain a Long-Lived Page Access Token
-   - Click the "i" (info) icon next to your access token in the Graph API Explorer and click "Open in Access Token Tool" -> "Extend Access Token" to get a 60-day token.
-   - Go back to the Graph API Explorer, paste the 60-day token, and run the query: \`me/accounts\`
-   - Find your target page in the response. Copy its \`access_token\` (this is a never-expiring Page Access Token) and its \`id\` (your Page ID).
-
-4. Configure the Web App Environment Variables
-   - Go to your hosting environment settings (AI Studio or Vercel, etc).
-   - Add the following environment variables:
-     • FACEBOOK_PAGE_ACCESS_TOKEN = Your_Never_Expiring_Page_Token
-     • FACEBOOK_PAGE_ID = Your_Page_ID
-   - Restart the server if necessary.
-
-5. Linking Instagram Business
-   - To post to Instagram, you MUST have an Instagram account converted to a professional Business Account, AND it must be linked to your Facebook Page.
-   - Go to your Facebook Page Settings -> Linked Accounts, and connect your Instagram account.
-   - No separate Instagram token or ID is needed! The app will automatically discover the connected Instagram Business account via the Page Access Token.
-
-After completing these steps, go back to the "Admin" tab in this application and click the refresh button in the Meta Integration section to verify your connection. You should now be able to schedule and publish correctly.`
+          title: "GDPR Consent Auditing",
+          content: "Every newsletter footer automatically includes an encrypted unsubscribe token. When clicked, contacts can opt-out and select their reasons. Managers can review unsubscribe ratios, clear log queues, or run absolute deletion purges to satisfy GDPR demands."
         }
       ],
       color: "bg-blue-50 dark:bg-blue-900/20"
     },
     {
-      title: "Governance & Approvals",
-      icon: <ShieldCheck className="w-5 h-5 text-emerald-500" />,
-      content: "Depending on your role, you may need supervisor approval to delete content or finalize schedules. If governance toggles are active, system restrictions keep the workflow safe and professional.",
-      longContent: "The platform implements a multi-tier authorization system. Regular Marketing users can create and edit drafts, but critical actions like 'Deleting a Published Post' or 'Bypassing Schedule Limits' may require a Marketing Supervisor's approval. Deletion requests appear in the Social Hub for supervisors to review. Status progression is also protected: once a post is 'Scheduled' for Facebook, its core content is locked to prevent accidental changes before deployment.",
-      color: "bg-emerald-50 dark:bg-emerald-900/20"
-    },
-    {
-      title: "Social Media Hub",
-      icon: <History className="w-5 h-5 text-violet-500" />,
-      content: "Track the performance and lifecycle of your published content. View historical data and real-time engagement metrics.",
-      longContent: "The Social Hub acts as your command center for everything that has left the Planner and gone live on social media. It provides transparency into post status and historical records.",
+      title: "Gmail SMTP Integration",
+      icon: <Shield className="w-5 h-5 text-emerald-500" />,
+      content: "Authorize campaign send operations securely through Google OAuth2. Keep secure keys hidden from client-side scripts.",
+      longContent: "All marketing broadcasts leverage Direct Google API consent configurations to dispatch emails safely without password storage.",
       topics: [
         {
-          title: "Monitoring Live Posts",
-          content: "The Hub displays a stream of 'Linked Content'. Each card shows:\n\n• Live Status: Indicates if the post is still live or has been deleted from Meta.\n• Performance Insights: (If supported) Real-time counts for Reactions, Comments, and Shares.\n• External Links: Quick links to view the post directly on Facebook or Instagram."
+          title: "OAuth Authentication Process",
+          content: "Rather than risking credentials inside the codebase, the portal uses secure browser OAuth loops. Access 'Settings' and authenticate using a Google developer client. This stores safe, encrypted refresh tokens server-side to sign out emails securely."
         },
         {
-          title: "Post History",
-          content: "Use the 'History' tab within the Social Hub to see a timeline of all completed publishing actions. You can search this history to see who published what, and on which date. This is crucial for verifying campaign consistency."
-        },
-        {
-          title: "Deletion Requests",
-          content: "If governance is enabled, deleting a published post requires a request. These requests appear in the Social Hub. Supervisors can either approve the deletion (removing it from both Meta and the Portal) or reject it, keeping the content live."
+          title: "Sending and Throttling",
+          content: "All campaign emails are queued and dispatched as individual SMTP blocks. Standard Gmail daily send boundaries (500/day for personal Gmail, 2000/day for corporate Google Workspace accounts) should be observed to preserve high sender reputation."
         }
       ],
-      color: "bg-violet-50 dark:bg-violet-900/20"
-    },
-    {
-      title: "System Infrastructure",
-      icon: <Shield className="w-5 h-5 text-purple-500" />,
-      content: "The app utilizes two projects: the 'Active Database' (marketing-43c62) for high-speed data and auth, and the 'Provisioned Runtime' for the AI Studio hosting environment and GenAI engine.",
-      longContent: "This application's architecture is split for maximum reliability. The 'Active Database' (marketing-43c62) manages our real-time Firestore database and Firebase Authentication, ensuring your workspace is always synced and secure. The 'Provisioned Runtime' (gen-lang-client...) is our hosting environment within Google Cloud/AI Studio, handling the secure processing of LLM requests and the overall system runtime.",
-      color: "bg-purple-50 dark:bg-purple-900/20"
+      color: "bg-emerald-50 dark:bg-emerald-950"
     }
   ];
 
@@ -543,7 +462,7 @@ After completing these steps, go back to the "Admin" tab in this application and
                     <div className="relative z-10">
                       <h3 className="text-2xl font-black mb-4">Master Your Workflow</h3>
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-                        {['Create', 'Generate', 'Connect'].map((step, i) => (
+                        {['Draft Campaign', 'Segment Tags', 'Broadcast Mail'].map((step, i) => (
                           <div key={i} className="flex items-center gap-3">
                             <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center font-bold">
                               {i + 1}
@@ -834,7 +753,7 @@ After completing these steps, go back to the "Admin" tab in this application and
           </a>
         </div>
         <p className="text-[10px] text-slate-300 dark:text-slate-600 font-bold uppercase tracking-[0.2em]">
-          Marketing Operations Portal © 2026
+          Email Marketing & Subscriber Portal © 2026
         </p>
       </div>
     </div>
