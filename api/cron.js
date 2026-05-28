@@ -384,7 +384,7 @@ async function executeCronSending(campaignId, campaign, config, hostUrl) {
           subTags = s.tags.split(',').map(t => t.trim());
         }
       }
-      return subTags.some(t => recipientTags.includes(t));
+      return subTags.some(t => recipientTags.some(rt => rt.trim().toLowerCase() === t.trim().toLowerCase()));
     });
 
     console.log(`[VERCEL CRON] Sending to ${activeFilteredSubscribers.length} recipients for campaign: "${campaign.title}"`);

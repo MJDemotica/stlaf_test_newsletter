@@ -1082,7 +1082,7 @@ async function startServer() {
             subTags = s.tags.split(',').map((t: string) => t.trim());
           }
         }
-        return subTags.some((t: string) => recipientTags.includes(t));
+        return subTags.some((t: string) => recipientTags.some((rt: string) => rt.trim().toLowerCase() === t.trim().toLowerCase()));
       });
 
       console.log(`[SCHEDULER] Filtered ${activeFilteredSubscribers.length} active subscribers for scheduled campaign "${campaign.title}"`);
