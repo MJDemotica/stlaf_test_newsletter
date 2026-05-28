@@ -755,9 +755,9 @@ async function startServer() {
           const subject = "Please verify your subscription";
           const body = `
             <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 25px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
-              <h2 style="color: #0f172a; margin-top: 0; font-size: 20px; font-weight: 700;">Welcome to STLAF Portal, ${name}!</h2>
+              <h2 style="color: #0f172a; margin-top: 0; font-size: 20px; font-weight: 700;">Welcome to the STLAF Newsletter, ${name}!</h2>
               <p style="color: #334155; font-size: 14px; line-height: 1.6;">
-                Thank you for subscribing. To secure your email and activate your subscriber dashboard, please confirm your interest by clicking the button below:
+                Thank you for subscribing. To secure your email and activate your newsletter subscription, please confirm your interest by clicking the button below:
               </p>
               <div style="text-align: center; margin: 30px 0;">
                 <a href="${verificationUrl}" style="background-color: #dcae44; color: #000000; font-weight: bold; font-size: 14px; text-decoration: none; padding: 12px 28px; border-radius: 10px; display: inline-block; box-shadow: 0 3px 5px rgba(220,174,68,0.3);">

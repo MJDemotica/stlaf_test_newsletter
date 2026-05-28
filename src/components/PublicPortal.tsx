@@ -152,7 +152,7 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({ mode }) => {
           <img src="/img/MAIN (1).png" alt="Portal Logo" className="w-full h-full object-contain" />
         </div>
         <h1 className="mt-4 text-xl font-bold text-slate-900 dark:text-white tracking-tight font-sans">
-          STLAF Marketing Portal
+          STLAF Newsletter
         </h1>
         <p className="text-xs text-slate-500 font-mono flex items-center gap-1.5 mt-1 bg-slate-100 dark:bg-slate-900 px-2 py-0.5 rounded-full border border-slate-205 dark:border-slate-805">
           <ShieldCheck className="w-3.5 h-3.5 text-amber-500" /> Secure Subscription Registry
@@ -183,14 +183,11 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({ mode }) => {
                 <div className="pt-6 border-t border-slate-100 dark:border-slate-800">
                   <button
                     onClick={() => {
-                      setVerificationStatus('none');
-                      setSuccess(false);
-                      window.history.pushState({}, '', '/subscribe');
-                      window.location.reload();
+                      window.close();
                     }}
                     className="w-full inline-flex justify-center items-center gap-2 py-2.5 px-4 border border-transparent rounded-xl text-sm font-semibold text-slate-900 bg-amber-400 hover:bg-amber-500 transition-all font-sans cursor-pointer"
                   >
-                    Return to subscriber portal
+                    Close Tab
                   </button>
                 </div>
               </>
