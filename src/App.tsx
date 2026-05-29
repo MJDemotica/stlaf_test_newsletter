@@ -164,6 +164,26 @@ function AppContent() {
     }
   }, [isDarkMode]);
 
+  // Background trigger for scheduled campaigns (bypassing Vercel Hobby daily cron limit)
+  useEffect(() => {
+    if (!showLoading && user && profile && profile.status === 'active') {
+      const triggerCron = async () => {
+        try {
+          await fetch('/api/cron');
+        } catch (err) {
+          console.error('[CRON HEARTBEAT ERROR]:', err);
+        }
+      };
+
+      // Trigger immediately when app is loaded/reloaded
+      triggerCron();
+
+      // Trigger every 60 seconds of active viewport sessions
+      const interval = setInterval(triggerCron, 60000);
+      return () => clearInterval(interval);
+    }
+  }, [showLoading, user, profile]);
+
   const handleNavigate = (view: ViewMode, data: any = null) => {
     setNavigationData(data);
     setViewMode(view);
