@@ -67,5 +67,21 @@ service cloud.firestore {
       allow read: if isAdmin() || (isActive() && resource.data.userId == request.auth.uid);
       allow update, delete: if isAdmin();
     }
+
+    match /emailCampaigns/{campaignId} {
+      allow read, write: if isActive();
+    }
+
+    match /subscribers/{subscriberId} {
+      allow read, write: if isActive();
+    }
+
+    match /emailLogs/{logId} {
+      allow read, write: if isActive();
+    }
+
+    match /emailTemplates/{templateId} {
+      allow read, write: if isActive();
+    }
   }
 }

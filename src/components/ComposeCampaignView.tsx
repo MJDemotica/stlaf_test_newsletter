@@ -92,8 +92,19 @@ export const ComposeCampaignView: React.FC<ComposeCampaignViewProps> = ({ onNavi
   const [body, setBody] = useState(initialCampaign?.body || '');
   const [importedPostId, setImportedPostId] = useState<string>((initialCampaign as any)?.importedPostId || '');
   const [recipientTags, setRecipientTags] = useState<string[]>(Array.isArray(initialCampaign?.recipientTags) ? initialCampaign.recipientTags : []);
-  const [sendType, setSendType] = useState<'now' | 'schedule'>('now');
-  const [scheduledAt, setScheduledAt] = useState('');
+  const [sendType, setSendType] = useState<'now' | 'schedule'>(() => {
+    return initialCampaign?.scheduledAt ? 'schedule' : 'now';
+  });
+  const [scheduledAt, setScheduledAt] = useState(() => {
+    if (!initialCampaign?.scheduledAt) return '';
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(initialCampaign.scheduledAt)) {
+      return initialCampaign.scheduledAt;
+    }
+    const d = new Date(initialCampaign.scheduledAt);
+    if (isNaN(d.getTime())) return initialCampaign.scheduledAt;
+    const pad = (num: number) => String(num).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  });
   const [attachments, setAttachments] = useState<{ name: string; type: string; size: number; content: string }[]>(() => {
     if (initialCampaign?.attachmentsJson) {
       try {
@@ -426,8 +437,7 @@ export const ComposeCampaignView: React.FC<ComposeCampaignViewProps> = ({ onNavi
 
     setLoading(true);
     try {
-      // 1. Save campaign doc to Firestore
-      const newCampaign: Omit<EmailCampaign, 'id'> = {
+      const campaignPayload = {
         title,
         subject,
         body,
@@ -435,15 +445,25 @@ export const ComposeCampaignView: React.FC<ComposeCampaignViewProps> = ({ onNavi
         type,
         recipientTags,
         scheduledAt: sendType === 'schedule' ? (scheduledAt ? new Date(scheduledAt).toISOString() : '') : '',
-        sentCount: 0,
-        failedCount: 0,
-        createdBy: auth.currentUser?.email || 'System',
-        createdAt: new Date().toISOString(),
+        createdBy: initialCampaign?.createdBy || auth.currentUser?.email || 'System',
+        createdAt: initialCampaign?.createdAt || new Date().toISOString(),
         attachmentsJson: JSON.stringify(attachments),
         importedPostId: importedPostId || ''
       };
 
-      const docRef = await addDoc(collection(db, 'emailCampaigns'), newCampaign);
+      let campaignId = '';
+
+      if (initialCampaign?.id) {
+        campaignId = initialCampaign.id;
+        await updateDoc(doc(db, 'emailCampaigns', campaignId), campaignPayload);
+      } else {
+        const docRef = await addDoc(collection(db, 'emailCampaigns'), {
+          ...campaignPayload,
+          sentCount: 0,
+          failedCount: 0
+        });
+        campaignId = docRef.id;
+      }
       
       if (isSend) {
         if (sendType === 'schedule') {
@@ -488,7 +508,7 @@ export const ComposeCampaignView: React.FC<ComposeCampaignViewProps> = ({ onNavi
           onNavigate('campaigns');
           // Call client API async
           axios.post('/api/gmail/send-bulk', {
-            campaignId: docRef.id,
+            campaignId: campaignId,
             recipients: activeFilteredSubscribers.map(s => ({ email: s.email, name: s.name }))
           }).catch(err => {
             console.error("Direct send request failed", err);
@@ -496,7 +516,7 @@ export const ComposeCampaignView: React.FC<ComposeCampaignViewProps> = ({ onNavi
         }
       } else {
         await sendInAppNotification({
-          title: "New Campaign Draft 📝",
+          title: initialCampaign?.id ? "Campaign Draft Updated 📝" : "New Campaign Draft 📝",
           message: `Campaign draft "${title}" was successfully saved.`,
           type: "info"
         });
@@ -504,7 +524,7 @@ export const ComposeCampaignView: React.FC<ComposeCampaignViewProps> = ({ onNavi
         onNavigate('campaigns');
       }
     } catch (e: any) {
-      console.error("Error creating campaign", e);
+      console.error("Error creating/updating campaign", e);
       toast.error(`Failed to compose campaign: ${e.message}`);
     } finally {
       setLoading(false);
