@@ -40,6 +40,31 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
   const [selectedCampaignIds, setSelectedCampaignIds] = useState<string[]>([]);
   const [isBulkModeActive, setIsBulkModeActive] = useState(false);
   const [triggeringScheduler, setTriggeringScheduler] = useState(false);
+  const [isForceSending, setIsForceSending] = useState(false);
+
+  const handleForceSend = async (campaignId: string) => {
+    setIsForceSending(true);
+    const loadingToast = toast.loading('Force dispatching scheduled campaign...');
+    try {
+      const resp = await axios.get(`/api/cron?forceCampaignId=${campaignId}`);
+      const data = resp.data;
+      if (data.success) {
+        const triggered = data.triggeredCampaigns || [];
+        if (triggered.length > 0) {
+          toast.success('Campaign dispatch finished successfully!', { id: loadingToast, duration: 4000 });
+        } else {
+          toast.success('Successfully finished checking/sending the campaign!', { id: loadingToast, duration: 4000 });
+        }
+      } else {
+        toast.error(`Force dispatch failed: ${data.message || 'Unknown error'}`, { id: loadingToast });
+      }
+    } catch (e: any) {
+      const errorMsg = e.response?.data?.message || e.message;
+      toast.error(`Force dispatch error: ${errorMsg}`, { id: loadingToast });
+    } finally {
+      setIsForceSending(false);
+    }
+  };
 
   const handleTriggerScheduler = async () => {
     setTriggeringScheduler(true);
@@ -583,40 +608,84 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
       </div>
 
       {/* HTML Content Viewer Drawer/Modal */}
-      {selectedCampaign && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-xl border border-slate-200 dark:border-slate-800 shadow-xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-              <div>
-                <h3 className="font-bold text-slate-900 dark:text-white">{selectedCampaign.title}</h3>
-                <p className="text-xs text-slate-500 mt-1">Subject: <strong>{selectedCampaign.subject}</strong></p>
+      {selectedCampaign && (() => {
+        const activeCampaignInModal = campaigns.find(c => c.id === selectedCampaign.id) || selectedCampaign;
+        return (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-xl border border-slate-200 dark:border-slate-800 shadow-xl overflow-hidden flex flex-col max-h-[90vh]">
+              <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-slate-900 dark:text-white">{activeCampaignInModal.title}</h3>
+                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+                      activeCampaignInModal.status === 'sent' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/30' :
+                      activeCampaignInModal.status === 'sending' ? 'bg-blue-100 text-blue-800 animate-pulse' :
+                      activeCampaignInModal.status === 'scheduled' ? 'bg-amber-100 text-amber-800 font-medium' :
+                      activeCampaignInModal.status === 'failed' ? 'bg-rose-100 text-rose-800 font-medium' :
+                      'bg-slate-100 text-slate-700'
+                    }`}>
+                      {activeCampaignInModal.status}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1">Subject: <strong>{activeCampaignInModal.subject}</strong></p>
+                  
+                  {activeCampaignInModal.scheduledAt && (
+                    <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1 flex items-center gap-1 font-medium">
+                      ⏱️ Scheduled: {new Date(activeCampaignInModal.scheduledAt).toLocaleString()}
+                    </p>
+                  )}
+                  {(activeCampaignInModal.sentCount > 0 || activeCampaignInModal.failedCount > 0) && (
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                      Progress: <span className="text-emerald-600 font-semibold">{activeCampaignInModal.sentCount || 0} sent</span>
+                      {activeCampaignInModal.failedCount > 0 && <span className="text-rose-500 font-semibold ml-2">{activeCampaignInModal.failedCount} failed</span>}
+                    </p>
+                  )}
+                </div>
+                <button
+                  onClick={() => setSelectedCampaign(null)}
+                  className="p-1.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400"
+                >
+                  <X className="w-5 h-5" />
+                </button>
               </div>
-              <button
-                onClick={() => setSelectedCampaign(null)}
-                className="p-1.5 rounded-full hover:bg-slate-100 text-slate-400"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
 
-            <div className="p-6 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-950 prose dark:prose-invert max-w-none">
-              <div dangerouslySetInnerHTML={{ __html: selectedCampaign.body }} />
-            </div>
+              <div className="p-6 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-950 prose dark:prose-invert max-w-none">
+                <div dangerouslySetInnerHTML={{ __html: activeCampaignInModal.body }} />
+              </div>
 
-            <div className="p-4 bg-slate-50 dark:bg-slate-950 border-t border-slate-200 dark:border-slate-800 flex justify-end gap-2 text-xs">
-              <span className="text-slate-400 mr-auto flex items-center gap-1">
-                <FileCode className="w-4 h-4" /> HTML Rendering
-              </span>
-              <button
-                onClick={() => setSelectedCampaign(null)}
-                className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-semibold transition-all"
-              >
-                Done
-              </button>
+              <div className="p-4 bg-slate-50 dark:bg-slate-950 border-t border-slate-200 dark:border-slate-800 flex justify-end items-center gap-2 text-xs">
+                <span className="text-slate-400 mr-auto flex items-center gap-1">
+                  <FileCode className="w-4 h-4" /> HTML Rendering
+                </span>
+                
+                {(activeCampaignInModal.status === 'scheduled' || activeCampaignInModal.status === 'failed') && (
+                  <button
+                    type="button"
+                    id="btn-force-trigger-send"
+                    disabled={isForceSending || activeCampaignInModal.status === 'sending'}
+                    onClick={() => handleForceSend(activeCampaignInModal.id)}
+                    className={`px-4 py-2 rounded-lg font-semibold flex items-center gap-1.5 transition-all ${
+                      isForceSending 
+                        ? 'bg-amber-200 text-amber-800 cursor-not-allowed dark:bg-amber-950/40 dark:text-amber-400' 
+                        : 'bg-amber-500 hover:bg-amber-600 text-white cursor-pointer shadow-sm hover:shadow dark:bg-amber-600 dark:hover:bg-amber-500'
+                    }`}
+                  >
+                    <Send className={`w-3.5 h-3.5 ${isForceSending ? 'animate-bounce' : ''}`} />
+                    {isForceSending ? 'Sending...' : 'Force Trigger Send'}
+                  </button>
+                )}
+
+                <button
+                  onClick={() => setSelectedCampaign(null)}
+                  className="px-4 py-2 bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg font-semibold transition-all"
+                >
+                  Done
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 };

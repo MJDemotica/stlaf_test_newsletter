@@ -420,11 +420,18 @@ async function startServer() {
         hostUrl = hostUrl.replace("http://", "https://");
       }
 
+      const forceCampaignId = req.query.forceCampaignId as string | undefined;
+
       for (const doc of documents) {
         const id = doc.name.split("/").pop();
         if (!id) continue;
         const campaign = fromFirestoreJSON(doc);
         if (!campaign) continue;
+
+        // Skip other campaigns if we are forcing a specific campaign
+        if (forceCampaignId && id !== forceCampaignId) {
+          continue;
+        }
 
         const campaignInfo: any = {
           id,
@@ -434,18 +441,20 @@ async function startServer() {
           reason: ""
         };
 
-        if (campaign.status === "scheduled") {
-          if (!campaign.scheduledAt) {
+        const isForced = forceCampaignId && id === forceCampaignId;
+
+        if (campaign.status === "scheduled" || isForced) {
+          if (!campaign.scheduledAt && !isForced) {
             campaignInfo.reason = "Ignored: Status is 'scheduled' but scheduledAt timestamp is empty.";
             addLog(`Campaign "${campaign.title}" (${id}) ignored: scheduledAt is empty.`);
           } else {
-            const schedTime = new Date(campaign.scheduledAt).getTime();
+            const schedTime = new Date(campaign.scheduledAt || "").getTime();
             const nowTime = Date.now();
 
-            if (isNaN(schedTime)) {
+            if (isNaN(schedTime) && !isForced) {
               campaignInfo.reason = `Ignored: Invalid scheduled date format: "${campaign.scheduledAt}"`;
               addLog(`Campaign "${campaign.title}" (${id}) ignored: invalid scheduled time format.`);
-            } else if (schedTime > nowTime) {
+            } else if (schedTime > nowTime && !isForced) {
               const timeDiffSec = Math.round((schedTime - nowTime) / 1000);
               campaignInfo.reason = `Waiting: Scheduled for ${campaign.scheduledAt} (triggers in ${timeDiffSec} seconds).`;
               addLog(`Campaign "${campaign.title}" (${id}) is in the future. Scheduled: ${campaign.scheduledAt}. current: ${report.currentTime}`);
@@ -453,8 +462,8 @@ async function startServer() {
               campaignInfo.reason = "Ignored: Already processing sending lock.";
               addLog(`Campaign "${campaign.title}" (${id}) skipped: sending lock already active.`);
             } else {
-              campaignInfo.reason = "Triggering sending cycle!";
-              addLog(`TRIGGERED: "${campaign.title}" (${id}) has reached its time!`);
+              campaignInfo.reason = isForced ? "Triggering forced sending cycle!" : "Triggering sending cycle!";
+              addLog(`TRIGGERED${isForced ? ' (FORCED)' : ''}: "${campaign.title}" (${id}) has reached its time or was forced!`);
               activeScheduledSends.add(id);
               report.triggeredCampaigns.push({ id, title: campaign.title });
               
@@ -466,11 +475,13 @@ async function startServer() {
               } catch (sendErr: any) {
                 campaignInfo.reason += ` Sending dispatch error: ${sendErr.message}`;
                 addLog(`Dispatch failed for "${campaign.title}": ${sendErr.message}`);
+              } finally {
+                activeScheduledSends.delete(id);
               }
             }
           }
         } else {
-          campaignInfo.reason = `Ignored: status is '${campaign.status}' (must be 'scheduled').`;
+          campaignInfo.reason = `Ignored: status is '${campaign.status}' (must be 'scheduled' or forced).`;
         }
         report.details.push(campaignInfo);
       }
