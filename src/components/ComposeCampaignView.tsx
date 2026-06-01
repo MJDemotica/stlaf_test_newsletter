@@ -1453,14 +1453,19 @@ export const ComposeCampaignView: React.FC<ComposeCampaignViewProps> = ({ onNavi
               </div>
 
               {sendType === 'schedule' && (
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">Target Date & Time</label>
-                  <input
-                    type="datetime-local"
-                    value={scheduledAt}
-                    onChange={(e) => setScheduledAt(e.target.value)}
-                    className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
-                  />
+                <div className="space-y-2">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">Target Date & Time</label>
+                    <input
+                      type="datetime-local"
+                      value={scheduledAt}
+                      onChange={(e) => setScheduledAt(e.target.value)}
+                      className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+                    />
+                  </div>
+                  <div className="p-2.5 bg-amber-50/50 dark:bg-amber-950/10 border border-amber-200/50 dark:border-amber-900/30 rounded-lg text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
+                    💡 <strong>Sandbox Tip:</strong> Development environments suspend when idle (which stops background timers). Once your target time arrives, you can click <strong>Sync Scheduler</strong> in the campaigns list to trigger immediate checks & delivery!
+                  </div>
                 </div>
               )}
             </div>

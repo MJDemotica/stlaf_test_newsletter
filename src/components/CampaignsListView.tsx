@@ -39,6 +39,31 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
   const [loading, setLoading] = useState(true);
   const [selectedCampaignIds, setSelectedCampaignIds] = useState<string[]>([]);
   const [isBulkModeActive, setIsBulkModeActive] = useState(false);
+  const [triggeringScheduler, setTriggeringScheduler] = useState(false);
+
+  const handleTriggerScheduler = async () => {
+    setTriggeringScheduler(true);
+    const loadingToast = toast.loading('Synchronizing scheduler and checking for due campaigns...');
+    try {
+      const resp = await axios.get('/api/cron');
+      const data = resp.data;
+      if (data.success) {
+        const triggered = data.triggeredCampaigns || [];
+        if (triggered.length > 0) {
+          toast.success(`Success! Sent ${triggered.length} campaign(s): ${triggered.map((c: any) => c.title).join(', ')}`, { id: loadingToast, duration: 6000 });
+        } else {
+          toast.success('Sync complete! All scheduled campaigns are up-to-date; none are due yet.', { id: loadingToast, duration: 4500 });
+        }
+      } else {
+        toast.error(`Sync failed: ${data.message || 'Unknown error'}`, { id: loadingToast });
+      }
+    } catch (e: any) {
+      const errorMsg = e.response?.data?.message || e.message;
+      toast.error(`Failed to trigger sync: ${errorMsg}`, { id: loadingToast });
+    } finally {
+      setTriggeringScheduler(false);
+    }
+  };
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'emailCampaigns'), (snapshot) => {
@@ -243,6 +268,15 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
           <h2 className="text-lg font-bold text-slate-900 dark:text-white">Email Campaigns</h2>
         </div>
         <div className="flex items-center gap-2.5">
+          <button
+            onClick={handleTriggerScheduler}
+            disabled={triggeringScheduler}
+            className="flex items-center justify-center gap-1.5 px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700/85 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 font-semibold rounded-lg text-sm shadow-sm transition-all disabled:opacity-50"
+            style={{ height: '42px' }}
+          >
+            <Clock className={`w-4 h-4 ${triggeringScheduler ? 'animate-spin' : ''}`} />
+            {triggeringScheduler ? 'Syncing...' : 'Sync Scheduler'}
+          </button>
           <button
             onClick={() => onNavigate('compose')}
             className="flex items-center justify-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white font-semibold rounded-lg text-sm shadow transition-all"
