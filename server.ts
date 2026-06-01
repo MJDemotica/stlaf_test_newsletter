@@ -459,10 +459,10 @@ async function startServer() {
               report.triggeredCampaigns.push({ id, title: campaign.title });
               
               try {
-                // Execute sending in non-blocking background
-                runScheduledCampaignSending(id, campaign, config);
-                campaignInfo.reason += " Sending cycle scheduled in background.";
-                addLog(`Dispatched background task for "${campaign.title}"`);
+                // Execute sending and await it to prevent background throttling in serverless
+                await runScheduledCampaignSending(id, campaign, config);
+                campaignInfo.reason += " Sending cycle finished successfully.";
+                addLog(`Successfully processed and sent scheduled campaign "${campaign.title}"`);
               } catch (sendErr: any) {
                 campaignInfo.reason += ` Sending dispatch error: ${sendErr.message}`;
                 addLog(`Dispatch failed for "${campaign.title}": ${sendErr.message}`);
@@ -806,7 +806,6 @@ async function startServer() {
       }
       
       await updateCampaignCount(campaignId, 'sending', 0, 0);
-      res.json({ success: true, message: "Campaign sending started in background." });
       
       const protocol = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
       const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
@@ -815,71 +814,70 @@ async function startServer() {
         hostUrl = hostUrl.replace("http://", "https://");
       }
 
-      (async () => {
-        let sentCount = 0;
-        let failedCount = 0;
-        for (const rec of recipients) {
-          const subject = (campaign.subject || "")
-            .replace(/{{name}}/gi, rec.name || "")
-            .replace(/{{email}}/gi, rec.email || "");
+      let sentCount = 0;
+      let failedCount = 0;
+      for (const rec of recipients) {
+        const subject = (campaign.subject || "")
+          .replace(/{{name}}/gi, rec.name || "")
+          .replace(/{{email}}/gi, rec.email || "");
 
-          const unsubscribeUrl = `${hostUrl}/unsubscribe?email=${encodeURIComponent(rec.email)}`;
-          let body = (campaign.body || "")
-            .replace(/{{name}}/gi, rec.name || "")
-            .replace(/{{email}}/gi, rec.email || "");
+        const unsubscribeUrl = `${hostUrl}/unsubscribe?email=${encodeURIComponent(rec.email)}`;
+        let body = (campaign.body || "")
+          .replace(/{{name}}/gi, rec.name || "")
+          .replace(/{{email}}/gi, rec.email || "");
 
-          if (/{{unsubscribe}}/i.test(body)) {
-            body = body.replace(/{{unsubscribe}}/gi, unsubscribeUrl);
+        if (/{{unsubscribe}}/i.test(body)) {
+          body = body.replace(/{{unsubscribe}}/gi, unsubscribeUrl);
+        } else {
+          const footerHtml = `
+            <br/><br/>
+            <hr style="border:none;border-top:1px solid #e2e8f0;margin:20px 0;" />
+            <p style="font-size:12px;color:#64748b;font-family:sans-serif;text-align:center;line-height:1.5;">
+              You are receiving this email because you subscribed to our list.<br/>
+              If you no longer wish to receive these emails, you can 
+              <a href="${unsubscribeUrl}" style="color:#c9a84c;text-decoration:underline;font-weight:600;">unsubscribe instantly here</a>.
+            </p>
+          `;
+          if (body.includes("</body>")) {
+            body = body.replace("</body>", `${footerHtml}</body>`);
+          } else if (body.includes("</html>")) {
+            body = body.replace("</html>", `${footerHtml}</html>`);
           } else {
-            const footerHtml = `
-              <br/><br/>
-              <hr style="border:none;border-top:1px solid #e2e8f0;margin:20px 0;" />
-              <p style="font-size:12px;color:#64748b;font-family:sans-serif;text-align:center;line-height:1.5;">
-                You are receiving this email because you subscribed to our list.<br/>
-                If you no longer wish to receive these emails, you can 
-                <a href="${unsubscribeUrl}" style="color:#c9a84c;text-decoration:underline;font-weight:600;">unsubscribe instantly here</a>.
-              </p>
-            `;
-            if (body.includes("</body>")) {
-              body = body.replace("</body>", `${footerHtml}</body>`);
-            } else if (body.includes("</html>")) {
-              body = body.replace("</html>", `${footerHtml}</html>`);
-            } else {
-              body += footerHtml;
-            }
+            body += footerHtml;
           }
-
-          try {
-            const rawMessage = buildMimeMessage(rec.email, config.authorizedEmail, subject, body, attachments);
-            const sendResp = await axios.post(
-              "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-              { raw: rawMessage },
-              { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
-            );
-            sentCount++;
-            await createEmailLog({
-              campaignId,
-              recipientEmail: rec.email,
-              status: 'sent',
-              sentAt: new Date().toISOString(),
-              gmailMessageId: sendResp.data.id
-            });
-          } catch (err: any) {
-            failedCount++;
-            const errMsg = err.response?.data?.error?.message || err.message || "Unknown error";
-            await createEmailLog({
-              campaignId,
-              recipientEmail: rec.email,
-              status: 'failed',
-              errorMessage: errMsg,
-              sentAt: new Date().toISOString()
-            });
-          }
-          await updateCampaignCount(campaignId, 'sending', sentCount, failedCount);
-          await new Promise(resolve => setTimeout(resolve, 200));
         }
-        await updateCampaignCount(campaignId, 'sent', sentCount, failedCount);
-      })();
+
+        try {
+          const rawMessage = buildMimeMessage(rec.email, config.authorizedEmail, subject, body, attachments);
+          const sendResp = await axios.post(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+            { raw: rawMessage },
+            { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
+          );
+          sentCount++;
+          await createEmailLog({
+            campaignId,
+            recipientEmail: rec.email,
+            status: 'sent',
+            sentAt: new Date().toISOString(),
+            gmailMessageId: sendResp.data.id
+          });
+        } catch (err: any) {
+          failedCount++;
+          const errMsg = err.response?.data?.error?.message || err.message || "Unknown error";
+          await createEmailLog({
+            campaignId,
+            recipientEmail: rec.email,
+            status: 'failed',
+            errorMessage: errMsg,
+            sentAt: new Date().toISOString()
+          });
+        }
+        await updateCampaignCount(campaignId, 'sending', sentCount, failedCount);
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+      await updateCampaignCount(campaignId, 'sent', sentCount, failedCount);
+      res.json({ success: true, message: "Campaign successfully sent.", sentCount, failedCount });
     } catch (err: any) {
       console.error("Bulk Send Error:", err.message);
       res.status(500).json({ error: err.message });
@@ -1196,8 +1194,8 @@ async function startServer() {
           // Mark as sending in DB immediately to prevent duplicate runs
           await updateCampaignCount(id, "sending", 0, 0);
 
-          // Execute sending in non-blocking background
-          runScheduledCampaignSending(id, campaign, config);
+          // Execute sending and await its completion to ensure serverless execution is sustained
+          await runScheduledCampaignSending(id, campaign, config);
         }
       }
     }
