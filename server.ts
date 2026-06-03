@@ -368,27 +368,7 @@ async function startServer() {
   }
 
   function injectTrackingToBody(body: string, campaignId: string, recipientEmail: string, hostUrl: string): string {
-    const trackingPixelUrl = `${hostUrl}/api/track/open?campaignId=${campaignId}&recipient=${encodeURIComponent(recipientEmail)}`;
-    const trackingPixelHtml = `<img src="${trackingPixelUrl}" width="1" height="1" alt="" border="0" style="display:none !important;" />`;
-    
-    let trackBody = body;
-    if (trackBody.includes("</body>")) {
-      trackBody = trackBody.replace("</body>", `${trackingPixelHtml}</body>`);
-    } else if (trackBody.includes("</html>")) {
-      trackBody = trackBody.replace("</html>", `${trackingPixelHtml}</html>`);
-    } else {
-      trackBody += trackingPixelHtml;
-    }
-
-    trackBody = trackBody.replace(/<a\s+(?:[^>]*?\s+)?href=["'](https?:\/\/[^"']+)["']/gi, (match, url) => {
-      if (url.includes("/unsubscribe") || url.includes("/api/public/verify") || url.includes("/api/track/open") || url.includes("/api/track/click")) {
-        return match;
-      }
-      const trackingClickUrl = `${hostUrl}/api/track/click?campaignId=${campaignId}&recipient=${encodeURIComponent(recipientEmail)}&url=${encodeURIComponent(url)}`;
-      return match.replace(url, trackingClickUrl);
-    });
-
-    return trackBody;
+    return body;
   }
 
   async function updateImportedPostStatus(postId: string, mailStatus: string) {
