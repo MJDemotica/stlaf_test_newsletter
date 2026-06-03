@@ -42,6 +42,10 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
   const [triggeringScheduler, setTriggeringScheduler] = useState(false);
   const [isForceSending, setIsForceSending] = useState(false);
 
+  const [schedulerReport, setSchedulerReport] = useState<any | null>(null);
+  const [showDiagnosticModal, setShowDiagnosticModal] = useState(false);
+  const [runningDiagnostics, setRunningDiagnostics] = useState(false);
+
   const handleForceSend = async (campaignId: string) => {
     setIsForceSending(true);
     const loadingToast = toast.loading('Force dispatching scheduled campaign...');
@@ -72,6 +76,7 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
     try {
       const resp = await axios.get('/api/cron');
       const data = resp.data;
+      setSchedulerReport(data);
       if (data.success) {
         const triggered = data.triggeredCampaigns || [];
         if (triggered.length > 0) {
@@ -87,6 +92,28 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
       toast.error(`Failed to trigger sync: ${errorMsg}`, { id: loadingToast });
     } finally {
       setTriggeringScheduler(false);
+    }
+  };
+
+  const runDiagnostics = async () => {
+    setRunningDiagnostics(true);
+    const loadingToast = toast.loading('Running scheduler diagnostics and syncing campaigns...');
+    try {
+      const resp = await axios.get('/api/cron');
+      setSchedulerReport(resp.data);
+      setShowDiagnosticModal(true);
+      toast.success('Diagnostics populated successfully.', { id: loadingToast });
+    } catch (e: any) {
+      const errorMsg = e.response?.data?.message || e.message;
+      if (e.response?.data) {
+        setSchedulerReport(e.response.data);
+        setShowDiagnosticModal(true);
+        toast.error(`Diagnostics loaded with alerts: ${errorMsg}`, { id: loadingToast });
+      } else {
+        toast.error(`Diagnostics failed: ${errorMsg}`, { id: loadingToast });
+      }
+    } finally {
+      setRunningDiagnostics(false);
     }
   };
 
@@ -301,6 +328,15 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
           >
             <Clock className={`w-4 h-4 ${triggeringScheduler ? 'animate-spin' : ''}`} />
             {triggeringScheduler ? 'Syncing...' : 'Sync Scheduler'}
+          </button>
+          <button
+            onClick={runDiagnostics}
+            disabled={runningDiagnostics || triggeringScheduler}
+            className="flex items-center justify-center gap-1.5 px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700/85 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 font-semibold rounded-lg text-sm shadow-sm transition-all disabled:opacity-50"
+            style={{ height: '42px' }}
+          >
+            <FileCode className={`w-4 h-4 ${runningDiagnostics ? 'animate-pulse text-amber-500' : ''}`} />
+            Diagnostics
           </button>
           <button
             onClick={() => onNavigate('compose')}
@@ -686,6 +722,175 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
           </div>
         );
       })()}
+
+      {/* Scheduler Diagnostics Modal */}
+      {showDiagnosticModal && schedulerReport && (
+        <div id="scheduler-diagnostic-modal" className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto font-sans">
+          <div className="bg-white dark:bg-slate-900 w-full max-w-3xl rounded-xl border border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col max-h-[85vh] animate-fade-in">
+            {/* Header */}
+            <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-950 rounded-t-xl">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <Clock className="w-5 h-5 text-amber-500 animate-pulse" />
+                  Scheduler Diagnostics & Dispatch Report
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Real-time status check for database, keys, and scheduled campaigns
+                </p>
+              </div>
+              <button
+                onClick={() => setShowDiagnosticModal(false)}
+                className="p-1.5 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-400 dark:text-slate-500 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 overflow-y-auto space-y-6 text-sm text-slate-900 dark:text-slate-100 bg-slate-50/30 dark:bg-slate-900/30">
+              
+              {/* Core Environments & Connection Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Firebase Connection Card */}
+                <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 space-y-3 shadow-sm">
+                  <h4 className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
+                    <CheckSquare className="w-4 h-4 text-emerald-500" /> Firebase Platform Config
+                  </h4>
+                  <div className="space-y-1.5 text-xs font-mono">
+                    <div className="flex justify-between">
+                      <span className="text-slate-500 font-sans">Project ID:</span>
+                      <span className="text-slate-900 dark:text-slate-350 font-semibold">{schedulerReport.environmentVariables?.VITE_FIREBASE_PROJECT_ID || 'PENDING'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500 font-sans">API Key:</span>
+                      <span className="text-slate-900 dark:text-slate-350">{schedulerReport.environmentVariables?.VITE_FIREBASE_API_KEY || 'MISSING'}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Gmail API Connection Card */}
+                <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 space-y-3 shadow-sm">
+                  <h4 className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
+                    <Mail className="w-4 h-4 text-amber-500" /> Gmail OAuth Status
+                  </h4>
+                  <div className="space-y-1.5 text-xs font-mono">
+                    <div className="flex justify-between">
+                      <span className="text-slate-500 font-sans">Connected:</span>
+                      <span className={`font-semibold ${schedulerReport.gmailConfig?.connected ? 'text-emerald-500' : 'text-rose-500'}`}>
+                        {schedulerReport.gmailConfig?.connected ? '✅ YES' : '❌ NO'}
+                      </span>
+                    </div>
+                    {schedulerReport.gmailConfig?.connected && (
+                      <div className="flex justify-between">
+                        <span className="text-slate-500 font-sans">Authorized:</span>
+                        <span className="text-slate-900 dark:text-slate-350 text-right max-w-[150px] truncate">{schedulerReport.gmailConfig?.authorizedEmail || 'None'}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between">
+                      <span className="text-slate-500 font-sans">Client Credentials:</span>
+                      <span className="text-slate-900 dark:text-slate-350">
+                        {schedulerReport.environmentVariables?.GMAIL_CLIENT_ID !== 'MISSING' ? '✅ LOADED' : '❌ MISSING'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Time Diagnostics */}
+              <div className="p-3 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg flex flex-wrap justify-between items-center text-xs text-slate-500 dark:text-slate-400 font-mono gap-2">
+                <div>Backend Server Time: <span className="text-slate-900 dark:text-slate-350 font-medium font-mono">{schedulerReport.currentTime ? new Date(schedulerReport.currentTime).toLocaleString() : 'N/A'}</span></div>
+                <div>Server Zone Offset: <span className="text-slate-900 dark:text-slate-350 font-medium font-mono">UTC (+00:00)</span></div>
+              </div>
+
+              {/* Campaign Check details list */}
+              <div className="space-y-3">
+                <h4 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                  Campaign Verification Scan (Checked {schedulerReport.campaignsChecked || 0})
+                </h4>
+                {schedulerReport.details && schedulerReport.details.length > 0 ? (
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden divide-y divide-slate-100 dark:divide-slate-800 bg-white dark:bg-slate-950 shadow-sm">
+                    {schedulerReport.details.map((campaign: any) => (
+                      <div key={campaign.id} className="p-4 hover:bg-slate-50/50 dark:hover:bg-slate-900/30 transition-colors flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
+                        <div className="space-y-1">
+                          <p className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5 flex-wrap">
+                            {campaign.title} 
+                            <span className="px-1.5 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider bg-slate-100 dark:bg-slate-800 text-slate-500">
+                              {campaign.status}
+                            </span>
+                          </p>
+                          <p className="text-slate-400 font-mono">
+                            Document ID: {campaign.id}
+                          </p>
+                          {campaign.scheduledAt && (
+                            <p className="text-slate-500 font-mono">
+                              Scheduled For: {new Date(campaign.scheduledAt).toLocaleString()}
+                            </p>
+                          )}
+                        </div>
+                        <div className="md:text-right max-w-sm">
+                          <p className={`p-1.5 rounded-lg border text-[11px] font-mono leading-relaxed inline-block ${
+                            campaign.reason.includes("TRIGGERED") || campaign.reason.includes("successfully") 
+                              ? "bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200/55 dark:border-emerald-800/40 text-emerald-700 dark:text-emerald-400"
+                              : campaign.reason.includes("Waiting")
+                                ? "bg-amber-50 dark:bg-amber-950/20 border-amber-200/55 dark:border-amber-800/40 text-amber-700 dark:text-amber-400"
+                                : "bg-rose-50 dark:bg-rose-950/20 border-rose-200/55 dark:border-rose-800/40 text-rose-700 dark:text-rose-400"
+                          }`}>
+                            {campaign.reason}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-6 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-center text-xs text-slate-500 italic">
+                    No campaigns checked during this run. List is empty.
+                  </div>
+                )}
+              </div>
+
+              {/* Execution Debug logs */}
+              {schedulerReport.debugLogs && schedulerReport.debugLogs.length > 0 && (
+                <div className="space-y-2">
+                  <h4 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                    Server Execution Logs
+                  </h4>
+                  <div className="p-4 bg-slate-950 text-emerald-400 border border-slate-800 rounded-xl font-mono text-xs max-h-44 overflow-y-auto space-y-1.5 shadow-inner">
+                    {schedulerReport.debugLogs.map((log: string, idx: number) => (
+                      <p key={idx} className="leading-relaxed break-all font-mono">
+                        {log}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 bg-slate-50 dark:bg-slate-950 border-t border-slate-200 dark:border-slate-800 flex justify-between items-center rounded-b-xl gap-2 text-xs">
+              <span className="text-slate-400 flex items-center gap-1 font-mono">
+                <CheckCircle className={`w-4 h-4 ${schedulerReport.success ? 'text-emerald-500' : 'text-rose-500'}`} />
+                Execution Code: {schedulerReport.success ? '200' : '500'}
+              </span>
+              <div className="flex gap-2">
+                <button
+                  onClick={runDiagnostics}
+                  disabled={runningDiagnostics || triggeringScheduler}
+                  className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-semibold cursor-pointer shadow-sm shadow-amber-500/10 font-sans disabled:opacity-50"
+                >
+                  {runningDiagnostics ? "Re-running..." : "Refresh Diagnostic"}
+                </button>
+                <button
+                  onClick={() => setShowDiagnosticModal(false)}
+                  className="px-4 py-2 bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg font-semibold font-sans transition-all"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
