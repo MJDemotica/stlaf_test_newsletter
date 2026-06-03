@@ -74,7 +74,7 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
     setTriggeringScheduler(true);
     const loadingToast = toast.loading('Synchronizing scheduler and checking for due campaigns...');
     try {
-      const resp = await axios.get('/api/cron');
+      const resp = await axios.get('/api/cron?force=true');
       const data = resp.data;
       setSchedulerReport(data);
       if (data.success) {
@@ -99,7 +99,7 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
     setRunningDiagnostics(true);
     const loadingToast = toast.loading('Running scheduler diagnostics and syncing campaigns...');
     try {
-      const resp = await axios.get('/api/cron');
+      const resp = await axios.get('/api/cron?force=true');
       setSchedulerReport(resp.data);
       setShowDiagnosticModal(true);
       toast.success('Diagnostics populated successfully.', { id: loadingToast });

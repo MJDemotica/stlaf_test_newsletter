@@ -1,5 +1,32 @@
 import axios from "axios";
 
+// Intercept responses to handle 429 and rate/quota limits automatically via exponential backoff retry
+axios.interceptors.response.use(
+  (response) => {
+    return response;
+  },
+  async (error) => {
+    const config = error.config;
+    const status = error.response?.status;
+    const errorMsg = error.response?.data?.error?.message || error.message || "";
+    
+    const isRateLimit = status === 429 || errorMsg.includes("Quota exceeded") || errorMsg.includes("RESOURCE_EXHAUSTED");
+    
+    if (isRateLimit && config) {
+      config._retryCount = config._retryCount || 0;
+      const maxRetries = 3;
+      if (config._retryCount < maxRetries) {
+        config._retryCount += 1;
+        const delay = Math.pow(2, config._retryCount) * 1000 + Math.floor(Math.random() * 500);
+        console.warn(`[AXIOS ERROR 429/QUOTA] Rate limit or quota exceeded for ${config.url}. Retrying in ${delay}ms... (Attempt ${config._retryCount} of ${maxRetries})`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        return axios(config);
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
 function getFirestoreUrl() {
   const projectId = process.env.VITE_FIREBASE_PROJECT_ID;
   const databaseId = process.env.VITE_FIREBASE_DATABASE_ID || "(default)";

@@ -63,15 +63,15 @@ function fromFirestoreJSON(doc) {
 
 let systemAuthToken = "";
 let systemAuthTokenExpiry = 0;
-let isResolvingSystemToken = false;
+let systemAuthTokenPromise = null;
 
 async function getSystemAuthToken() {
   if (systemAuthToken && Date.now() < systemAuthTokenExpiry - 60000) {
     return systemAuthToken;
   }
 
-  if (isResolvingSystemToken) {
-    throw new Error("System auth token resolution is already in progress.");
+  if (systemAuthTokenPromise) {
+    return systemAuthTokenPromise;
   }
 
   const projectId = process.env.VITE_FIREBASE_PROJECT_ID;
@@ -83,66 +83,69 @@ async function getSystemAuthToken() {
   const email = "system-cron@stlaf-newsletter.com";
   const password = "SystemCronSecurePass987#";
 
-  isResolvingSystemToken = true;
-  try {
-    const signInUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`;
-    const signInResp = await axios.post(signInUrl, {
-      email,
-      password,
-      returnSecureToken: true
-    });
-    
-    systemAuthToken = signInResp.data.idToken;
-    systemAuthTokenExpiry = Date.now() + Number(signInResp.data.expiresIn) * 1000;
-    return systemAuthToken;
-  } catch (signInErr) {
-    const errCode = signInErr.response?.data?.error?.message;
-    if (errCode === "EMAIL_NOT_FOUND" || errCode === "USER_NOT_FOUND" || errCode === "INVALID_LOGIN_CREDENTIALS") {
-      console.log("[SYSTEM AUTH] System crawler account not found. Self-provisioning system-cron profile in Vercel...");
-      try {
-        const signUpUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${apiKey}`;
-        const signUpResp = await axios.post(signUpUrl, {
-          email,
-          password,
-          returnSecureToken: true
-        });
-        
-        const idToken = signUpResp.data.idToken;
-        const uid = signUpResp.data.localId;
-        const expiresIn = signUpResp.data.expiresIn;
+  systemAuthTokenPromise = (async () => {
+    try {
+      const signInUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`;
+      const signInResp = await axios.post(signInUrl, {
+        email,
+        password,
+        returnSecureToken: true
+      });
+      
+      systemAuthToken = signInResp.data.idToken;
+      systemAuthTokenExpiry = Date.now() + Number(signInResp.data.expiresIn) * 1000;
+      return systemAuthToken;
+    } catch (signInErr) {
+      const errCode = signInErr.response?.data?.error?.message;
+      if (errCode === "EMAIL_NOT_FOUND" || errCode === "USER_NOT_FOUND" || errCode === "INVALID_LOGIN_CREDENTIALS") {
+        console.log("[SYSTEM AUTH] System crawler account not found. Self-provisioning system-cron profile in Vercel...");
+        try {
+          const signUpUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${apiKey}`;
+          const signUpResp = await axios.post(signUpUrl, {
+            email,
+            password,
+            returnSecureToken: true
+          });
+          
+          const idToken = signUpResp.data.idToken;
+          const uid = signUpResp.data.localId;
+          const expiresIn = signUpResp.data.expiresIn;
 
-        const userDocUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/users/${uid}?key=${apiKey}`;
-        const userDocData = {
-          fields: {
-            email: { stringValue: email },
-            role: { stringValue: "marketing_supervisor" },
-            status: { stringValue: "active" }
-          }
-        };
-        
-        await axios.put(userDocUrl, userDocData, {
-          headers: { 
-            "Content-Type": "application/json",
-            "X-Skip-System-Auth": "true",
-            "Authorization": `Bearer ${idToken}`
-          }
-        });
-        console.log("[SYSTEM AUTH] Self-provisioning of system profile was fully initialized and activated in Firestore!");
+          const userDocUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/users/${uid}?key=${apiKey}`;
+          const userDocData = {
+            fields: {
+              email: { stringValue: email },
+              role: { stringValue: "marketing_supervisor" },
+              status: { stringValue: "active" }
+            }
+          };
+          
+          await axios.put(userDocUrl, userDocData, {
+            headers: { 
+              "Content-Type": "application/json",
+              "X-Skip-System-Auth": "true",
+              "Authorization": `Bearer ${idToken}`
+            }
+          });
+          console.log("[SYSTEM AUTH] Self-provisioning of system profile was fully initialized and activated in Firestore!");
 
-        systemAuthToken = idToken;
-        systemAuthTokenExpiry = Date.now() + Number(expiresIn) * 1000;
-        return systemAuthToken;
-      } catch (signUpErr) {
-        console.error("[SYSTEM AUTH ERROR] Failed to perform system self-sign-up workflow in Vercel:", signUpErr.response?.data || signUpErr.message);
-        throw new Error(`Self-registration failed: ${signUpErr.message}`);
+          systemAuthToken = idToken;
+          systemAuthTokenExpiry = Date.now() + Number(expiresIn) * 1000;
+          return systemAuthToken;
+        } catch (signUpErr) {
+          console.error("[SYSTEM AUTH ERROR] Failed to perform system self-sign-up workflow in Vercel:", signUpErr.response?.data || signUpErr.message);
+          throw new Error(`Self-registration failed: ${signUpErr.message}`);
+        }
+      } else {
+        console.error("[SYSTEM AUTH ERROR] Unexpected credentials rejection in Vercel:", signInErr.response?.data || signInErr.message);
+        throw signInErr;
       }
-    } else {
-      console.error("[SYSTEM AUTH ERROR] Unexpected credentials rejection in Vercel:", signInErr.response?.data || signInErr.message);
-      throw signInErr;
+    } finally {
+      systemAuthTokenPromise = null;
     }
-  } finally {
-    isResolvingSystemToken = false;
-  }
+  })();
+
+  return systemAuthTokenPromise;
 }
 
 axios.interceptors.request.use(async (config) => {
@@ -163,26 +166,64 @@ axios.interceptors.request.use(async (config) => {
   return Promise.reject(error);
 });
 
+// Intercept responses to handle 429 and rate/quota limits automatically via exponential backoff retry
+axios.interceptors.response.use(
+  (response) => {
+    return response;
+  },
+  async (error) => {
+    const config = error.config;
+    const status = error.response?.status;
+    const errorMsg = error.response?.data?.error?.message || error.message || "";
+    
+    const isRateLimit = status === 429 || errorMsg.includes("Quota exceeded") || errorMsg.includes("RESOURCE_EXHAUSTED");
+    
+    if (isRateLimit && config) {
+      config._retryCount = config._retryCount || 0;
+      const maxRetries = 3;
+      if (config._retryCount < maxRetries) {
+        config._retryCount += 1;
+        const delay = Math.pow(2, config._retryCount) * 1000 + Math.floor(Math.random() * 500);
+        console.warn(`[AXIOS ERROR 429/QUOTA] Rate limit or quota exceeded for ${config.url}. Retrying in ${delay}ms... (Attempt ${config._retryCount} of ${maxRetries})`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        return axios(config);
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
 let cachedGmailConfig = null;
 let lastGmailConfigFetch = 0;
+let activeGmailConfigPromise = null;
 
 async function getGmailConfig() {
-  if (cachedGmailConfig && Date.now() - lastGmailConfigFetch < 60000) {
+  if (cachedGmailConfig && Date.now() - lastGmailConfigFetch < 300000) {
     return cachedGmailConfig;
   }
+  if (activeGmailConfigPromise) {
+    return activeGmailConfigPromise;
+  }
+  
   const url = `${getFirestoreUrl()}/settings/gmail_config${getApiKeyParam()}`;
-  try {
-    const resp = await axios.get(url);
-    cachedGmailConfig = fromFirestoreJSON(resp.data);
-    lastGmailConfigFetch = Date.now();
-    return cachedGmailConfig;
-  } catch (err) {
-    if (err.response?.status === 404) {
+  activeGmailConfigPromise = (async () => {
+    try {
+      const resp = await axios.get(url);
+      cachedGmailConfig = fromFirestoreJSON(resp.data);
+      lastGmailConfigFetch = Date.now();
+      return cachedGmailConfig;
+    } catch (err) {
+      if (err.response?.status === 404) {
+        return { connected: false };
+      }
+      console.error("Error reading Gmail config from Firestore REST:", err.message);
       return { connected: false };
+    } finally {
+      activeGmailConfigPromise = null;
     }
-    console.error("Error reading Gmail config from Firestore REST:", err.message);
-    return { connected: false };
-  }
+  })();
+  
+  return activeGmailConfigPromise;
 }
 
 async function saveGmailConfig(config) {
@@ -420,12 +461,26 @@ function getFirestoreRestUrl(collectionPath, extraParams = "") {
   return url;
 }
 
-async function fetchFirestoreCollection(collectionPath) {
+// In-memory cache for Firestore collections in serverless API to prevent rate-limiting/429 & quota-exceeded
+const firestoreCache = {};
+const CACHE_TTL_MS = 180000; // 3 minutes (180,000 ms) to aggressively prevent rate-limits / 429 / quota exceeded
+
+async function fetchFirestoreCollection(collectionPath, forceRefresh = false) {
+  const now = Date.now();
+  if (!forceRefresh && firestoreCache[collectionPath] && (now - firestoreCache[collectionPath].timestamp < CACHE_TTL_MS)) {
+    console.log(`[FIRESTORE CACHE] [API/CRON] Serving cached documents for "${collectionPath}" (age: ${Math.round((now - firestoreCache[collectionPath].timestamp) / 1000)}s)`);
+    return firestoreCache[collectionPath].data;
+  }
+
   let allDocuments = [];
   let pageToken = "";
   let loopCount = 0;
   
   do {
+    if (loopCount > 0) {
+      // Pacing delay to prevent rate limits/429 during pagination loop
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
     const extraParams = `pageSize=100${pageToken ? `&pageToken=${pageToken}` : ""}`;
     const url = getFirestoreRestUrl(collectionPath, extraParams);
     const resp = await axios.get(url);
@@ -434,6 +489,11 @@ async function fetchFirestoreCollection(collectionPath) {
     pageToken = resp.data?.nextPageToken || "";
     loopCount++;
   } while (pageToken && loopCount < 30);
+  
+  firestoreCache[collectionPath] = {
+    data: allDocuments,
+    timestamp: now
+  };
   
   return allDocuments;
 }
@@ -492,11 +552,9 @@ export default async function handler(req, res) {
 
   try {
     addLog("Fetching Gmail config from Firestore...");
-    const configUrl = `${getFirestoreUrl()}/settings/gmail_config${getApiKeyParam()}`;
     let config;
     try {
-      const resp = await axios.get(configUrl);
-      config = fromFirestoreJSON(resp.data);
+      config = await getGmailConfig();
       addLog(`Gmail info retrieved successfully. Connected status in DB: ${config?.connected}`);
       report.gmailConfig = {
         connected: !!config?.connected,
@@ -521,10 +579,13 @@ export default async function handler(req, res) {
       });
     }
 
-    addLog("Fetching email campaigns from Firestore...");
+    const forceCampaignId = req.query?.forceCampaignId;
+    const forceRefresh = !!req.query?.force || !!forceCampaignId;
+
+    addLog(`Fetching email campaigns from Firestore (forceRefresh: ${forceRefresh})...`);
     let documents = [];
     try {
-      documents = await fetchFirestoreCollection("emailCampaigns");
+      documents = await fetchFirestoreCollection("emailCampaigns", forceRefresh);
     } catch (campErr) {
       addLog(`Failed to fetch campaigns: ${campErr.response?.data?.error?.message || campErr.message}`);
       return res.status(500).json({
@@ -539,8 +600,6 @@ export default async function handler(req, res) {
     const protocol = req.headers['x-forwarded-proto'] || 'https';
     const host = req.headers.host || 'stlaf-marketing-newsletter.vercel.app';
     const hostUrl = `${protocol}://${host}`;
-
-    const forceCampaignId = req.query?.forceCampaignId;
 
     for (const doc of documents) {
       const id = doc.name.split("/").pop();

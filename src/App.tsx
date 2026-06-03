@@ -164,9 +164,12 @@ function AppContent() {
     }
   }, [isDarkMode]);
 
+  const userId = user?.uid;
+  const profileStatus = profile?.status;
+
   // Background trigger for scheduled campaigns (bypassing Vercel Hobby daily cron limit)
   useEffect(() => {
-    if (!showLoading && user && profile && profile.status === 'active') {
+    if (!showLoading && userId && profileStatus === 'active') {
       const triggerCron = async () => {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 15000);
@@ -186,11 +189,11 @@ function AppContent() {
       // Trigger immediately when app is loaded/reloaded
       triggerCron();
 
-      // Trigger every 60 seconds of active viewport sessions
-      const interval = setInterval(triggerCron, 60000);
+      // Trigger every 5 minutes (300,000 ms) of active viewport sessions to reduce Firebase requests
+      const interval = setInterval(triggerCron, 300000);
       return () => clearInterval(interval);
     }
-  }, [showLoading, user, profile]);
+  }, [showLoading, userId, profileStatus]);
 
   const handleNavigate = (view: ViewMode, data: any = null) => {
     setNavigationData(data);
@@ -205,7 +208,7 @@ function AppContent() {
   };
 
   useEffect(() => {
-    if (!showLoading && user && profile && profile.status === 'active') {
+    if (!showLoading && userId && profileStatus === 'active') {
       const urlParams = new URLSearchParams(window.location.search);
       const postId = urlParams.get('postId');
       if (postId) {
@@ -323,7 +326,7 @@ function AppContent() {
         fetchPost();
       }
     }
-  }, [showLoading, user, profile]);
+  }, [showLoading, userId, profileStatus]);
 
   const getRoleLabel = (role?: string) => {
     if (!role) return 'Operations';

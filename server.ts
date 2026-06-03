@@ -107,15 +107,15 @@ async function startServer() {
 
   let systemAuthToken: string = "";
   let systemAuthTokenExpiry: number = 0;
-  let isResolvingSystemToken = false;
+  let systemAuthTokenPromise: Promise<string> | null = null;
 
   async function getSystemAuthToken(): Promise<string> {
     if (systemAuthToken && Date.now() < systemAuthTokenExpiry - 60000) {
       return systemAuthToken;
     }
 
-    if (isResolvingSystemToken) {
-      throw new Error("System auth token resolution is already in progress.");
+    if (systemAuthTokenPromise) {
+      return systemAuthTokenPromise;
     }
 
     const projectId = process.env.VITE_FIREBASE_PROJECT_ID;
@@ -127,69 +127,72 @@ async function startServer() {
     const email = "system-cron@stlaf-newsletter.com";
     const password = "SystemCronSecurePass987#";
 
-    isResolvingSystemToken = true;
-    try {
-      // 1. Attempt to Sign-In
-      const signInUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`;
-      const signInResp = await axios.post(signInUrl, {
-        email,
-        password,
-        returnSecureToken: true
-      });
-      
-      systemAuthToken = signInResp.data.idToken;
-      systemAuthTokenExpiry = Date.now() + Number(signInResp.data.expiresIn) * 1000;
-      return systemAuthToken;
-    } catch (signInErr: any) {
-      const errCode = signInErr.response?.data?.error?.message;
-      if (errCode === "EMAIL_NOT_FOUND" || errCode === "USER_NOT_FOUND" || errCode === "INVALID_LOGIN_CREDENTIALS") {
-        console.log("[SYSTEM AUTH] System crawler account not found. Self-provisioning system-cron profile...");
-        try {
-          // 2. Register/Sign-Up the system user
-          const signUpUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${apiKey}`;
-          const signUpResp = await axios.post(signUpUrl, {
-            email,
-            password,
-            returnSecureToken: true
-          });
-          
-          const idToken = signUpResp.data.idToken;
-          const uid = signUpResp.data.localId;
-          const expiresIn = signUpResp.data.expiresIn;
+    systemAuthTokenPromise = (async () => {
+      try {
+        // 1. Attempt to Sign-In
+        const signInUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`;
+        const signInResp = await axios.post(signInUrl, {
+          email,
+          password,
+          returnSecureToken: true
+        });
+        
+        systemAuthToken = signInResp.data.idToken;
+        systemAuthTokenExpiry = Date.now() + Number(signInResp.data.expiresIn) * 1000;
+        return systemAuthToken;
+      } catch (signInErr: any) {
+        const errCode = signInErr.response?.data?.error?.message;
+        if (errCode === "EMAIL_NOT_FOUND" || errCode === "USER_NOT_FOUND" || errCode === "INVALID_LOGIN_CREDENTIALS") {
+          console.log("[SYSTEM AUTH] System crawler account not found. Self-provisioning system-cron profile...");
+          try {
+            // 2. Register/Sign-Up the system user
+            const signUpUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${apiKey}`;
+            const signUpResp = await axios.post(signUpUrl, {
+              email,
+              password,
+              returnSecureToken: true
+            });
+            
+            const idToken = signUpResp.data.idToken;
+            const uid = signUpResp.data.localId;
+            const expiresIn = signUpResp.data.expiresIn;
 
-          // 3. Save profile to users collection to allow the 'isActive()' rule check to succeed
-          const userDocUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/users/${uid}?key=${apiKey}`;
-          const userDocData = {
-            fields: {
-              email: { stringValue: email },
-              role: { stringValue: "marketing_supervisor" },
-              status: { stringValue: "active" }
-            }
-          };
-          
-          await axios.put(userDocUrl, userDocData, {
-            headers: { 
-              "Content-Type": "application/json",
-              "X-Skip-System-Auth": "true",
-              "Authorization": `Bearer ${idToken}`
-            }
-          });
-          console.log("[SYSTEM AUTH] Self-provisioning of system profile was fully initialized and activated in Firestore!");
+            // 3. Save profile to users collection to allow the 'isActive()' rule check to succeed
+            const userDocUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/users/${uid}?key=${apiKey}`;
+            const userDocData = {
+              fields: {
+                email: { stringValue: email },
+                role: { stringValue: "marketing_supervisor" },
+                status: { stringValue: "active" }
+              }
+            };
+            
+            await axios.put(userDocUrl, userDocData, {
+              headers: { 
+                "Content-Type": "application/json",
+                "X-Skip-System-Auth": "true",
+                "Authorization": `Bearer ${idToken}`
+              }
+            });
+            console.log("[SYSTEM AUTH] Self-provisioning of system profile was fully initialized and activated in Firestore!");
 
-          systemAuthToken = idToken;
-          systemAuthTokenExpiry = Date.now() + Number(expiresIn) * 1000;
-          return systemAuthToken;
-        } catch (signUpErr: any) {
-          console.error("[SYSTEM AUTH ERROR] Failed to perform system self-sign-up workflow:", signUpErr.response?.data || signUpErr.message);
-          throw new Error(`Self-registration failed: ${signUpErr.message}`);
+            systemAuthToken = idToken;
+            systemAuthTokenExpiry = Date.now() + Number(expiresIn) * 1000;
+            return systemAuthToken;
+          } catch (signUpErr: any) {
+            console.error("[SYSTEM AUTH ERROR] Failed to perform system self-sign-up workflow:", signUpErr.response?.data || signUpErr.message);
+            throw new Error(`Self-registration failed: ${signUpErr.message}`);
+          }
+        } else {
+          console.error("[SYSTEM AUTH ERROR] Unexpected credentials rejection:", signInErr.response?.data || signInErr.message);
+          throw signInErr;
         }
-      } else {
-        console.error("[SYSTEM AUTH ERROR] Unexpected credentials rejection:", signInErr.response?.data || signInErr.message);
-        throw signInErr;
+      } finally {
+        systemAuthTokenPromise = null;
       }
-    } finally {
-      isResolvingSystemToken = false;
-    }
+    })();
+
+    return systemAuthTokenPromise;
   }
 
   // Intercept all outgoing axios requests to dynamically authenticate Firestore REST API calls
@@ -219,26 +222,64 @@ async function startServer() {
     return Promise.reject(error);
   });
 
+  // Intercept responses to handle 429 and rate/quota limits automatically via exponential backoff retry
+  axios.interceptors.response.use(
+    (response) => {
+      return response;
+    },
+    async (error: any) => {
+      const config = error.config;
+      const status = error.response?.status;
+      const errorMsg = error.response?.data?.error?.message || error.message || "";
+      
+      const isRateLimit = status === 429 || errorMsg.includes("Quota exceeded") || errorMsg.includes("RESOURCE_EXHAUSTED");
+      
+      if (isRateLimit && config) {
+        config._retryCount = config._retryCount || 0;
+        const maxRetries = 3;
+        if (config._retryCount < maxRetries) {
+          config._retryCount += 1;
+          const delay = Math.pow(2, config._retryCount) * 1000 + Math.floor(Math.random() * 500);
+          console.warn(`[AXIOS ERROR 429/QUOTA] Rate limit or quota exceeded for ${config.url}. Retrying in ${delay}ms... (Attempt ${config._retryCount} of ${maxRetries})`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          return axios(config);
+        }
+      }
+      return Promise.reject(error);
+    }
+  );
+
   let cachedGmailConfig: any = null;
   let lastGmailConfigFetch = 0;
+  let activeGmailConfigPromise: Promise<any> | null = null;
 
   async function getGmailConfig(): Promise<any> {
     if (cachedGmailConfig && Date.now() - lastGmailConfigFetch < 300000) {
       return cachedGmailConfig;
     }
-    const url = `${getFirestoreUrl()}/settings/gmail_config${getApiKeyParam()}`;
-    try {
-      const resp = await axios.get(url);
-      cachedGmailConfig = fromFirestoreJSON(resp.data);
-      lastGmailConfigFetch = Date.now();
-      return cachedGmailConfig;
-    } catch (err: any) {
-      if (err.response?.status === 404) {
-        return { connected: false };
-      }
-      console.error("Error reading Gmail config from Firestore REST:", err.message);
-      return { connected: false };
+    if (activeGmailConfigPromise) {
+      return activeGmailConfigPromise;
     }
+    
+    const url = `${getFirestoreUrl()}/settings/gmail_config${getApiKeyParam()}`;
+    activeGmailConfigPromise = (async () => {
+      try {
+        const resp = await axios.get(url);
+        cachedGmailConfig = fromFirestoreJSON(resp.data);
+        lastGmailConfigFetch = Date.now();
+        return cachedGmailConfig;
+      } catch (err: any) {
+        if (err.response?.status === 404) {
+          return { connected: false };
+        }
+        console.error("Error reading Gmail config from Firestore REST:", err.message);
+        return { connected: false };
+      } finally {
+        activeGmailConfigPromise = null;
+      }
+    })();
+    
+    return activeGmailConfigPromise;
   }
 
   async function saveGmailConfig(config: any) {
@@ -614,10 +655,13 @@ async function startServer() {
         });
       }
 
-      addLog("Fetching email campaigns from Firestore...");
+      const forceCampaignId = req.query.forceCampaignId as string | undefined;
+      const forceRefresh = !!req.query.force || !!forceCampaignId;
+
+      addLog(`Fetching email campaigns from Firestore (forceRefresh: ${forceRefresh})...`);
       let documents: any[] = [];
       try {
-        documents = await fetchFirestoreCollection("emailCampaigns");
+        documents = await fetchFirestoreCollection("emailCampaigns", forceRefresh);
       } catch (campErr: any) {
         addLog(`Failed to fetch campaigns: ${campErr.response?.data?.error?.message || campErr.message}`);
         return res.status(500).json({
@@ -635,8 +679,6 @@ async function startServer() {
       if (hostUrl.includes("run.app") && !hostUrl.startsWith("https://")) {
         hostUrl = hostUrl.replace("http://", "https://");
       }
-
-      const forceCampaignId = req.query.forceCampaignId as string | undefined;
 
       for (const doc of documents) {
         const id = doc.name.split("/").pop();
@@ -1134,7 +1176,7 @@ async function startServer() {
 
     try {
       // 1. Fetch all subscribers to see if email already exists
-      const allDocs = await fetchFirestoreCollection("subscribers");
+      const allDocs = await fetchFirestoreCollection("subscribers", true);
       const subscribers = allDocs.map((d: any) => {
         const sId = d.name.split("/").pop();
         return { id: sId, ...fromFirestoreJSON(d) };
@@ -1267,7 +1309,7 @@ async function startServer() {
 
     try {
       // 1. Fetch matching subscriber
-      const allDocs = await fetchFirestoreCollection("subscribers");
+      const allDocs = await fetchFirestoreCollection("subscribers", true);
       const subscribers = allDocs.map((d: any) => {
         const sId = d.name.split("/").pop();
         return { id: sId, ...fromFirestoreJSON(d) };
@@ -1328,7 +1370,7 @@ async function startServer() {
 
     try {
       // 1. Fetch subscribers to locate match
-      const allDocs = await fetchFirestoreCollection("subscribers");
+      const allDocs = await fetchFirestoreCollection("subscribers", true);
       const subscribers = allDocs.map((d: any) => {
         const sId = d.name.split("/").pop();
         return { id: sId, ...fromFirestoreJSON(d) };
@@ -1424,6 +1466,14 @@ async function startServer() {
   // Set to keep track of campaign IDs that are currently being processed
   const activeScheduledSends = new Set<string>();
 
+  // In-memory cache for Firestore collections to prevent rate-limiting/429 & quota-exceeded
+  interface CacheEntry {
+    data: any[];
+    timestamp: number;
+  }
+  const firestoreCache: Record<string, CacheEntry> = {};
+  const CACHE_TTL_MS = 180000; // 3 minutes (180,000 ms) to aggressively prevent rate-limits / 429 / quota exceeded
+
   // Helper to build Firestore API Urls with query params cleanly
   function getFirestoreRestUrl(collectionPath: string, extraParams: string = "") {
     const baseUrl = getFirestoreUrl();
@@ -1442,12 +1492,22 @@ async function startServer() {
     return url;
   }
 
-  async function fetchFirestoreCollection(collectionPath: string): Promise<any[]> {
+  async function fetchFirestoreCollection(collectionPath: string, forceRefresh: boolean = false): Promise<any[]> {
+    const now = Date.now();
+    if (!forceRefresh && firestoreCache[collectionPath] && (now - firestoreCache[collectionPath].timestamp < CACHE_TTL_MS)) {
+      console.log(`[FIRESTORE CACHE] Serving cached documents for "${collectionPath}" (age: ${Math.round((now - firestoreCache[collectionPath].timestamp) / 1000)}s)`);
+      return firestoreCache[collectionPath].data;
+    }
+
     let allDocuments: any[] = [];
     let pageToken = "";
     let loopCount = 0;
     
     do {
+      if (loopCount > 0) {
+        // Pacing delay to prevent rate limits/429 during pagination loop
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
       const extraParams = `pageSize=100${pageToken ? `&pageToken=${pageToken}` : ""}`;
       const url = getFirestoreRestUrl(collectionPath, extraParams);
       const resp = await axios.get(url);
@@ -1456,6 +1516,11 @@ async function startServer() {
       pageToken = resp.data?.nextPageToken || "";
       loopCount++;
     } while (pageToken && loopCount < 30);
+    
+    firestoreCache[collectionPath] = {
+      data: allDocuments,
+      timestamp: now
+    };
     
     return allDocuments;
   }
