@@ -269,12 +269,122 @@ async function startServer() {
         status,
         sentCount,
         failedCount,
+        opensCount: typeof currentData.opensCount === 'number' ? currentData.opensCount : 0,
+        clicksCount: typeof currentData.clicksCount === 'number' ? currentData.clicksCount : 0,
+        openedEmails: currentData.openedEmails || [],
+        clickedEmails: currentData.clickedEmails || [],
         sentAt: status === 'sent' ? new Date().toISOString() : (currentData.sentAt || '')
       };
       await axios.patch(url, toFirestoreJSON(updatedData));
     } catch (err: any) {
       console.error(`Error updating emailCampaigns/${campaignId}:`, err.response?.data || err.message);
     }
+  }
+
+  async function registerEmailOpen(campaignId: string, recipientEmail: string) {
+    const baseUrl = getFirestoreUrl();
+    const apiKey = getApiKeyParam();
+    const url = `${baseUrl}/emailCampaigns/${campaignId}${apiKey}`;
+    try {
+      const currentResp = await axios.get(url);
+      const currentData = fromFirestoreJSON(currentResp.data) || {};
+      
+      let openedEmails: string[] = [];
+      if (currentData.openedEmails) {
+        if (Array.isArray(currentData.openedEmails)) {
+          openedEmails = currentData.openedEmails;
+        } else if (typeof currentData.openedEmails === 'string') {
+          try { openedEmails = JSON.parse(currentData.openedEmails); } catch(e) {}
+        }
+      }
+      
+      const emailLower = recipientEmail ? recipientEmail.trim().toLowerCase() : '';
+      if (emailLower && openedEmails.map(e => e.toLowerCase()).includes(emailLower)) {
+        console.log(`[TRACKING] Email ${recipientEmail} already counted for open on campaign ${campaignId}.`);
+        return;
+      }
+      
+      if (emailLower) {
+        openedEmails.push(emailLower);
+      }
+      
+      const currentOpens = typeof currentData.opensCount === 'number' ? currentData.opensCount : 0;
+      const updatedData = {
+        ...currentData,
+        opensCount: currentOpens + 1,
+        openedEmails: openedEmails
+      };
+      
+      await axios.patch(url, toFirestoreJSON(updatedData));
+      console.log(`[TRACKING] Successfully registered open for ${recipientEmail} on campaign ${campaignId}. New open count: ${currentOpens + 1}`);
+    } catch (err: any) {
+      console.error(`Error registering open on emailCampaigns/${campaignId}:`, err.response?.data || err.message);
+    }
+  }
+
+  async function registerEmailClick(campaignId: string, recipientEmail: string) {
+    const baseUrl = getFirestoreUrl();
+    const apiKey = getApiKeyParam();
+    const url = `${baseUrl}/emailCampaigns/${campaignId}${apiKey}`;
+    try {
+      const currentResp = await axios.get(url);
+      const currentData = fromFirestoreJSON(currentResp.data) || {};
+      
+      let clickedEmails: string[] = [];
+      if (currentData.clickedEmails) {
+        if (Array.isArray(currentData.clickedEmails)) {
+          clickedEmails = currentData.clickedEmails;
+        } else if (typeof currentData.clickedEmails === 'string') {
+          try { clickedEmails = JSON.parse(currentData.clickedEmails); } catch(e) {}
+        }
+      }
+      
+      const emailLower = recipientEmail ? recipientEmail.trim().toLowerCase() : '';
+      if (emailLower && clickedEmails.map(e => e.toLowerCase()).includes(emailLower)) {
+        console.log(`[TRACKING] Email ${recipientEmail} already counted for click on campaign ${campaignId}.`);
+        return;
+      }
+      
+      if (emailLower) {
+        clickedEmails.push(emailLower);
+      }
+      
+      const currentClicks = typeof currentData.clicksCount === 'number' ? currentData.clicksCount : 0;
+      const updatedData = {
+        ...currentData,
+        clicksCount: currentClicks + 1,
+        clickedEmails: clickedEmails
+      };
+      
+      await axios.patch(url, toFirestoreJSON(updatedData));
+      console.log(`[TRACKING] Successfully registered click for ${recipientEmail} on campaign ${campaignId}. New click count: ${currentClicks + 1}`);
+    } catch (err: any) {
+      console.error(`Error registering click on emailCampaigns/${campaignId}:`, err.response?.data || err.message);
+    }
+  }
+
+  function injectTrackingToBody(body: string, campaignId: string, recipientEmail: string, hostUrl: string): string {
+    const trackingPixelUrl = `${hostUrl}/api/track/open?campaignId=${campaignId}&recipient=${encodeURIComponent(recipientEmail)}`;
+    const trackingPixelHtml = `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none !important;" referrerPolicy="no-referrer" />`;
+    
+    let trackBody = body;
+    if (trackBody.includes("</body>")) {
+      trackBody = trackBody.replace("</body>", `${trackingPixelHtml}</body>`);
+    } else if (trackBody.includes("</html>")) {
+      trackBody = trackBody.replace("</html>", `${trackingPixelHtml}</html>`);
+    } else {
+      trackBody += trackingPixelHtml;
+    }
+
+    trackBody = trackBody.replace(/<a\s+(?:[^>]*?\s+)?href=["'](https?:\/\/[^"']+)["']/gi, (match, url) => {
+      if (url.includes("/unsubscribe") || url.includes("/api/public/verify") || url.includes("/api/track/open") || url.includes("/api/track/click")) {
+        return match;
+      }
+      const trackingClickUrl = `${hostUrl}/api/track/click?campaignId=${campaignId}&recipient=${encodeURIComponent(recipientEmail)}&url=${encodeURIComponent(url)}`;
+      return match.replace(url, trackingClickUrl);
+    });
+
+    return trackBody;
   }
 
   async function updateImportedPostStatus(postId: string, mailStatus: string) {
@@ -975,6 +1085,7 @@ async function startServer() {
         }
 
         try {
+          body = injectTrackingToBody(body, campaignId, rec.email, hostUrl);
           const rawMessage = buildMimeMessage(rec.email, config.authorizedEmail, subject, body, attachments);
           const sendResp = await axios.post(
             "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
@@ -1263,6 +1374,56 @@ async function startServer() {
     }
   });
 
+  // Real-time tracking endpoints
+  app.get("/api/track/open", async (req, res) => {
+    const { campaignId, recipient } = req.query as { campaignId?: string; recipient?: string };
+    
+    if (campaignId) {
+      const recipientEmail = recipient ? String(recipient).trim() : 'anonymous';
+      console.log(`[TRACKING OPEN] Received open pixel request for campaign: ${campaignId}, recipient: ${recipientEmail}`);
+      try {
+        await registerEmailOpen(campaignId, recipientEmail);
+      } catch (err: any) {
+        console.error(`[TRACKING OPEN ERR] Failed to register open for campaign ${campaignId}:`, err.message);
+      }
+    }
+
+    // Return 1x1 transparent GIF pixel
+    const pixel = Buffer.from(
+      'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+      'base64'
+    );
+    res.writeHead(200, {
+      'Content-Type': 'image/gif',
+      'Content-Length': pixel.length,
+      'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+      'Pragma': 'no-cache',
+      'Expires': '0'
+    });
+    res.end(pixel);
+  });
+
+  app.get("/api/track/click", async (req, res) => {
+    const { campaignId, recipient, url } = req.query as { campaignId?: string; recipient?: string; url?: string };
+    const targetUrl = url ? String(url).trim() : '';
+
+    if (campaignId && targetUrl) {
+      const recipientEmail = recipient ? String(recipient).trim() : 'anonymous';
+      console.log(`[TRACKING CLICK] Received link click request for campaign: ${campaignId}, recipient: ${recipientEmail}, targetUrl: ${targetUrl}`);
+      try {
+        await registerEmailClick(campaignId, recipientEmail);
+      } catch (err: any) {
+        console.error(`[TRACKING CLICK ERR] Failed to register click for campaign ${campaignId}:`, err.message);
+      }
+    }
+
+    if (targetUrl) {
+      res.redirect(targetUrl);
+    } else {
+      res.status(400).send("Parameter 'url' is required.");
+    }
+  });
+
   // Set to keep track of campaign IDs that are currently being processed
   const activeScheduledSends = new Set<string>();
 
@@ -1420,6 +1581,7 @@ async function startServer() {
         }
 
         try {
+          body = injectTrackingToBody(body, campaignId, rec.email, lastSeenHostUrl);
           const rawMessage = buildMimeMessage(rec.email, config.authorizedEmail, subject, body, attachments);
           const sendResp = await axios.post(
             "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",

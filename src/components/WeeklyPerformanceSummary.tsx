@@ -62,7 +62,7 @@ export const WeeklyPerformanceSummary: React.FC<WeeklyPerformanceSummaryProps> =
     return Number(val.toFixed(1));
   };
 
-  // Enhance campaigns with computed and deterministic performance metrics
+  // Enhance campaigns with computed and real performance metrics
   const enhancedCampaigns = useMemo<EnhancedCampaignStats[]>(() => {
     const now = new Date();
     
@@ -72,40 +72,12 @@ export const WeeklyPerformanceSummary: React.FC<WeeklyPerformanceSummaryProps> =
       const total = sent + failed;
       const deliveryRate = total > 0 ? Number(((sent / total) * 100).toFixed(1)) : 100;
 
-      // Seed baseline rates depending on campaign category
-      let minOpen = 30, maxOpen = 55;
-      let minClick = 1.5, maxClick = 5.5;
+      // Extract real metrics from the campaign entry
+      const opensCount = typeof camp.opensCount === 'number' ? camp.opensCount : 0;
+      const clicksCount = typeof camp.clicksCount === 'number' ? camp.clicksCount : 0;
 
-      if (camp.type === 'Newsletter') {
-        minOpen = 45; maxOpen = 68;
-        minClick = 4.2; maxClick = 9.8;
-      } else if (camp.type === 'Promotion') {
-        minOpen = 24; maxOpen = 42;
-        minClick = 3.5; maxClick = 8.5;
-      } else if (camp.type === 'Announcement') {
-        minOpen = 52; maxOpen = 74;
-        minClick = 2.0; maxClick = 6.0;
-      } else if (camp.type === 'Update') {
-        minOpen = 48; maxOpen = 65;
-        minClick = 2.5; maxClick = 5.8;
-      } else if (camp.type === 'Follow-up') {
-        minOpen = 55; maxOpen = 78;
-        minClick = 6.0; maxClick = 12.5;
-      }
-
-      // Generate stable, repeatable stats
-      const openRate = camp.status === 'sent' && sent > 0 
-        ? getSeededValue(camp.id, minOpen, maxOpen, 1) 
-        : 0;
-
-      // Click rate must be absolute (relative to total sent, i.e. clickedCount <= opensCount)
-      const maxPossibleClick = openRate * 0.45; // clicks should realistically be up to ~45% of opens
-      const clickRate = camp.status === 'sent' && sent > 0
-        ? getSeededValue(camp.id, Math.min(minClick, maxPossibleClick), Math.min(maxClick, maxPossibleClick), 2)
-        : 0;
-
-      const opensCount = Math.round(sent * (openRate / 100));
-      const clicksCount = Math.round(sent * (clickRate / 100));
+      const openRate = sent > 0 ? Number(((opensCount / sent) * 100).toFixed(1)) : 0;
+      const clickRate = sent > 0 ? Number(((clicksCount / sent) * 100).toFixed(1)) : 0;
 
       const createdDate = new Date(camp.createdAt || now);
       const diffTime = Math.abs(now.getTime() - createdDate.getTime());
