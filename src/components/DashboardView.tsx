@@ -22,6 +22,7 @@ import { collection, onSnapshot, query, limit, orderBy } from 'firebase/firestor
 import { db } from '../firebase';
 import { EmailCampaign, Subscriber } from '../types';
 import axios from 'axios';
+import { WeeklyPerformanceSummary } from './WeeklyPerformanceSummary';
 import {
   ResponsiveContainer,
   BarChart,
@@ -322,6 +323,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, userRo
           </div>
         )}
       </motion.div>
+
+      {/* Weekly Performance Summary */}
+      <WeeklyPerformanceSummary campaigns={campaigns} />
 
       {/* Main Split details */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
