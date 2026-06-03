@@ -23,9 +23,19 @@ async function startServer() {
     console.log(`[SERVER] ${new Date().toISOString()} - ${req.method} ${req.url}`);
     
     // Dynamically capture host URL
-    const protocol = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
-    const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
-    let currentUrl = `${protocol}://${host}`;
+    let currentUrl = '';
+    const referer = req.headers.referer;
+    if (referer && referer.startsWith('http')) {
+      try {
+        const refUrl = new URL(referer);
+        currentUrl = `${refUrl.protocol}//${refUrl.host}`;
+      } catch (e) {}
+    }
+    if (!currentUrl) {
+      const protocol = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
+      const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
+      currentUrl = `${protocol}://${host}`;
+    }
     if (currentUrl.includes("run.app") && !currentUrl.startsWith("https://")) {
       currentUrl = currentUrl.replace("http://", "https://");
     }
@@ -299,13 +309,10 @@ async function startServer() {
       }
       
       const emailLower = recipientEmail ? recipientEmail.trim().toLowerCase() : '';
-      if (emailLower && openedEmails.map(e => e.toLowerCase()).includes(emailLower)) {
-        console.log(`[TRACKING] Email ${recipientEmail} already counted for open on campaign ${campaignId}.`);
-        return;
-      }
-      
-      if (emailLower) {
+      let isNewUniqueOpen = false;
+      if (emailLower && !openedEmails.map(e => e.toLowerCase()).includes(emailLower)) {
         openedEmails.push(emailLower);
+        isNewUniqueOpen = true;
       }
       
       const currentOpens = typeof currentData.opensCount === 'number' ? currentData.opensCount : 0;
@@ -316,7 +323,7 @@ async function startServer() {
       };
       
       await axios.patch(url, toFirestoreJSON(updatedData));
-      console.log(`[TRACKING] Successfully registered open for ${recipientEmail} on campaign ${campaignId}. New open count: ${currentOpens + 1}`);
+      console.log(`[TRACKING] Successfully registered open for ${recipientEmail} on campaign ${campaignId}. Unique=${isNewUniqueOpen}, New open count: ${currentOpens + 1}`);
     } catch (err: any) {
       console.error(`Error registering open on emailCampaigns/${campaignId}:`, err.response?.data || err.message);
     }
@@ -340,13 +347,10 @@ async function startServer() {
       }
       
       const emailLower = recipientEmail ? recipientEmail.trim().toLowerCase() : '';
-      if (emailLower && clickedEmails.map(e => e.toLowerCase()).includes(emailLower)) {
-        console.log(`[TRACKING] Email ${recipientEmail} already counted for click on campaign ${campaignId}.`);
-        return;
-      }
-      
-      if (emailLower) {
+      let isNewUniqueClick = false;
+      if (emailLower && !clickedEmails.map(e => e.toLowerCase()).includes(emailLower)) {
         clickedEmails.push(emailLower);
+        isNewUniqueClick = true;
       }
       
       const currentClicks = typeof currentData.clicksCount === 'number' ? currentData.clicksCount : 0;
@@ -357,7 +361,7 @@ async function startServer() {
       };
       
       await axios.patch(url, toFirestoreJSON(updatedData));
-      console.log(`[TRACKING] Successfully registered click for ${recipientEmail} on campaign ${campaignId}. New click count: ${currentClicks + 1}`);
+      console.log(`[TRACKING] Successfully registered click for ${recipientEmail} on campaign ${campaignId}. Unique=${isNewUniqueClick}, New click count: ${currentClicks + 1}`);
     } catch (err: any) {
       console.error(`Error registering click on emailCampaigns/${campaignId}:`, err.response?.data || err.message);
     }
@@ -365,7 +369,7 @@ async function startServer() {
 
   function injectTrackingToBody(body: string, campaignId: string, recipientEmail: string, hostUrl: string): string {
     const trackingPixelUrl = `${hostUrl}/api/track/open?campaignId=${campaignId}&recipient=${encodeURIComponent(recipientEmail)}`;
-    const trackingPixelHtml = `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none !important;" referrerPolicy="no-referrer" />`;
+    const trackingPixelHtml = `<img src="${trackingPixelUrl}" width="1" height="1" alt="" border="0" style="display:none !important;" />`;
     
     let trackBody = body;
     if (trackBody.includes("</body>")) {
@@ -1044,9 +1048,19 @@ async function startServer() {
       
       await updateCampaignCount(campaignId, 'sending', 0, 0);
       
-      const protocol = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
-      const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
-      let hostUrl = `${protocol}://${host}`;
+      let hostUrl = '';
+      const referer = req.headers.referer;
+      if (referer && referer.startsWith('http')) {
+        try {
+          const refUrl = new URL(referer);
+          hostUrl = `${refUrl.protocol}//${refUrl.host}`;
+        } catch (e) {}
+      }
+      if (!hostUrl) {
+        const protocol = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
+        const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
+        hostUrl = `${protocol}://${host}`;
+      }
       if (hostUrl.includes("run.app") && !hostUrl.startsWith("https://")) {
         hostUrl = hostUrl.replace("http://", "https://");
       }
