@@ -1784,14 +1784,14 @@ async function startServer() {
     }
   }
 
-  // Start periodic scheduler checks (every 60 seconds)
+  // Start periodic scheduler checks (every 5 minutes)
   setInterval(async () => {
     try {
       await checkAndSendScheduledCampaigns();
     } catch (e: any) {
       console.error("[SCHEDULER INTERVAL ERR] Error in scheduled run:", e.message);
     }
-  }, 60000);
+  }, 300000);
 
   // Background subscriber cleanup (every 10 minutes)
   setInterval(async () => {
