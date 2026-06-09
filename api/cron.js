@@ -1,3 +1,10 @@
+//
+// File: cron.js
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Serverless cron handler for sending campaigns, checking execution intervals, and handling batch Gmail dispatching
+//
+
 import axios from 'axios';
 
 // ── FIRESTORE REST HELPERS ───────────────────────────────────────────────────

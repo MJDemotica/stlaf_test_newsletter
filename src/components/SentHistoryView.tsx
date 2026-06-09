@@ -1,3 +1,10 @@
+//
+// File: SentHistoryView.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Archive logs viewer displaying sent history reports, specific dispatch details, error/failing notes, and retry buttons for failures
+//
+
 import React, { useState, useEffect } from 'react';
 import { 
   History, 

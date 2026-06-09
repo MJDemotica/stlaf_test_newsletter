@@ -1,3 +1,10 @@
+//
+// File: types.ts
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Declares global TypeScript types, interfaces, roles, departments, and entity models used across the application
+//
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0

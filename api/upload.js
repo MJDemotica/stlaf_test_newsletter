@@ -1,3 +1,10 @@
+//
+// File: upload.js
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Serverless upload dispatcher parsing base64 stream uploads and executing remote integrations
+//
+
 import axios from 'axios';
 
 function getFirestoreUrl() {

@@ -1,3 +1,10 @@
+//
+// File: AdminView.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Administration dashboard panel allowing marketing supervisors to manage files, templates, logs, subscribers database, and roles
+//
+
 import React, { useState, useEffect } from 'react';
 import { 
   Plus, 

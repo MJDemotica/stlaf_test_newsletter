@@ -1,3 +1,10 @@
+//
+// File: HelpView.tsx
+// Author: Juan Dela Cruz & AI Assistant
+// Date: 2026-06-09
+// Purpose: Renders the documentation guide center, contact forms, and structured app creation guidelines.
+//
+
 import React, { useState, useEffect } from 'react';
 import { 
   HelpCircle, 
@@ -210,6 +217,27 @@ export const HelpView: React.FC<HelpViewProps> = ({ userEmail, displayName, user
         }
       ],
       color: "bg-emerald-50 dark:bg-emerald-950"
+    },
+    {
+      title: "App Creation Guidelines",
+      icon: <BookOpen className="w-5 h-5 text-amber-500" />,
+      content: "Ensure quality, readability, and maintainability across the code repo by adhering strictly to our developer standards.",
+      longContent: "These are instructions every developer must follow when creating, maintaining, and testing our app. Follow them strictly to ensure quality, readability, and maintainability.",
+      topics: [
+        {
+          title: "Coder's Notes",
+          content: "Every file must start with a comment block detailing the file name, author, date, and purpose.\n\nExample:\n//\nFile: user_auth.ts\nAuthor: Juan Dela Cruz\nDate: 2026-05-15\nPurpose: Handles user login and session management\n//\n\nAdditionally, write clear inline comments to explain tricky, customized, or multi-step logic."
+        },
+        {
+          title: "Project Structure",
+          content: "All project files should be organized clearly. Keep your source code inside a `src` folder, with separate subfolders for:\n• `models` (data models)\n• `controllers` (business logic)\n• `views` (UI templates or frontend)\n• `utils` (helper functions)\n• `services` (external APIs or integrations)\n\nAdditionally, place:\n• All unit and integration tests in a `tests` folder\n• Documentation in a `docs` folder\n• Configuration files in a `config` folder\n• Images, fonts, or other media in an `assets` folder\n\nThis structure keeps the project organized, makes it easy to find files, and helps the team work efficiently."
+        },
+        {
+          title: "Error Handling",
+          content: "Always indicate and trace a list of possible issues your web application might encounter, such as null values, database connection failures, invalid user inputs, missing files, or API request errors, and provide solutions for each.\n\nKey Principles:\n• Validate all inputs\n• Check resource availability before usage\n• Always log errors clearly so the system is easier to debug and maintain using structured logging (INFO, WARN, ERROR)\n• Do not leave unhandled exceptions—every potential failure must be handled."
+        }
+      ],
+      color: "bg-amber-50 dark:bg-amber-950/20"
     }
   ];
 
@@ -347,7 +375,7 @@ export const HelpView: React.FC<HelpViewProps> = ({ userEmail, displayName, user
                       }}
                       className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold text-sm shadow-lg shadow-indigo-200 dark:shadow-none hover:bg-indigo-700 transition-all"
                     >
-                      Ask a Supervisor
+                      Contact Support
                     </button>
                   </div>
                 </div>

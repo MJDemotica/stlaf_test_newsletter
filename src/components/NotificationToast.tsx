@@ -1,3 +1,10 @@
+//
+// File: NotificationToast.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Interactive alert toast micro-notification pop-up displaying automatic timeouts or manually dismissed states
+//
+
 import React, { useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { CheckCircle2, AlertCircle, X } from 'lucide-react';

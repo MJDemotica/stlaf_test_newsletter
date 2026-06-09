@@ -1,3 +1,10 @@
+//
+// File: public-verify.js
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Serverless endpoint verifying email tokens from confirmation links and activating subscription records in Firestore
+//
+
 import axios from "axios";
 
 // Intercept responses to handle 429 and rate/quota limits automatically via exponential backoff retry

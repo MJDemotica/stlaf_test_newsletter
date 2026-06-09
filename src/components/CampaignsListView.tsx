@@ -1,3 +1,10 @@
+//
+// File: CampaignsListView.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Renders and manages the active email campaigns collection, with tools for searching, deleting, scheduling, duplicating, and force execution
+//
+
 import React, { useState, useEffect } from 'react';
 import { 
   Mail, 

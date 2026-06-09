@@ -1,3 +1,10 @@
+//
+// File: useFacebookPost.ts
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Custom hook for crafting and sending campaign and post objects to Meta's Facebook/Instagram pages API endpoints
+//
+
 import { useState } from 'react';
 
 interface FacebookPostData {

@@ -1,3 +1,10 @@
+//
+// File: public-unsubscribe.js
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Serverless endpoint handling subscriber opt-out/unsubscription requests and logging unsubscription reasons
+//
+
 import axios from "axios";
 
 // Intercept responses to handle 429 and rate/quota limits automatically via exponential backoff retry

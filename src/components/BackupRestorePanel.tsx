@@ -1,3 +1,10 @@
+//
+// File: BackupRestorePanel.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Multi-function panel hosting backup downloads, JSON settings restoration, and system cache reset triggers with safety modals
+//
+
 import React, { useState } from 'react';
 import { 
   History, 

@@ -1,3 +1,10 @@
+//
+// File: RoleManager.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Administrative user role and department allocation interface, handling pending registrations and bulk whitelist assignments
+//
+
 import React, { useState, useEffect } from 'react';
 import { 
   Plus, 

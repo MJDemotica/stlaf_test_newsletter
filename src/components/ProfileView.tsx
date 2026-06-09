@@ -1,3 +1,10 @@
+//
+// File: ProfileView.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Authenticated User Profile view supporting custom display names selection, department changes, and Google OAuth logout
+//
+
 import React, { useState } from 'react';
 import { 
   User, 

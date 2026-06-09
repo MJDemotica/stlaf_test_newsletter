@@ -1,3 +1,10 @@
+//
+// File: notificationService.ts
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Handles persistent system notifications, alert actions, read/unread status updates, and subscriber cleanup logs
+//
+
 import { 
   collection, 
   onSnapshot, 

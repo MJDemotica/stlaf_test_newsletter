@@ -1,3 +1,10 @@
+//
+// File: useAuth.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Authentication context provider hook utilizing Firebase Auth, managing session logic, profiles, and role mapping
+//
+
 import React, { useState, useEffect, createContext, useContext } from 'react';
 import { auth, db } from '../firebase';
 import {

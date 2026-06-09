@@ -1,3 +1,10 @@
+//
+// File: SettingsView.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Configures system settings, credentials setup protocols, Gmail OAuth connections, backup/restore routines, and public portals urls
+//
+
 import React, { useState, useEffect } from 'react';
 import { 
   Settings, 

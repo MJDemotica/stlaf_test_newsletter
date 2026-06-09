@@ -1,3 +1,10 @@
+//
+// File: DashboardView.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Marketing analytics status center visualizing campaign metrics, active subscribers, real-time alert logs, and system health tickers
+//
+
 import React, { useState, useEffect } from 'react';
 import { 
   Plus, 

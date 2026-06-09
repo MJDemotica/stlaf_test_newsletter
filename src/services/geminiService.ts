@@ -1,3 +1,10 @@
+//
+// File: geminiService.ts
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Integrates the Gemini API via @google/genai package to automatically generate marketing content/captions
+//
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0

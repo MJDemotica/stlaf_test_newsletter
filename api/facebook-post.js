@@ -1,3 +1,10 @@
+//
+// File: facebook-post.js
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Serverless route dispatching or scheduling content publishing requested for Facebook and Instagram Graph API
+//
+
 import axios from 'axios';
 import FormData from 'form-data';
 

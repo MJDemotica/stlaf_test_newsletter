@@ -1,3 +1,10 @@
+//
+// File: meta-post.js
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Serverless API gateway dispatching simultaneous social media posts to page feeds or IG container pipelines via Meta Graph API
+//
+
 import axios from 'axios';
 import FormData from 'form-data';
 

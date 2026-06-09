@@ -1,3 +1,10 @@
+//
+// File: firebase.ts
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Initializes and exports Firebase app instance, Firestore database instance, Authentication, Google Auth provider, and Cloud Storage
+//
+
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';

@@ -1,3 +1,10 @@
+//
+// File: useInstagramPost.ts
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Custom hook dedicated to dispatching formatted image/video posts directly to the Instagram Graph API
+//
+
 import { useState } from 'react';
 
 interface InstagramPostData {

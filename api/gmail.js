@@ -1,3 +1,10 @@
+//
+// File: gmail.js
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Serverless Gmail OAuth setup routines, redirect callback, status inspection, and token verification
+//
+
 import axios from "axios";
 
 // Intercept responses to handle 429 and rate/quota limits automatically via exponential backoff retry

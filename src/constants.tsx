@@ -1,3 +1,10 @@
+//
+// File: constants.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Declares social media platform definitions, constant content categories, color associations, and assets configurations
+//
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0

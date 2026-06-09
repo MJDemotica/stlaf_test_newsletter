@@ -1,3 +1,10 @@
+//
+// File: ConfirmationModal.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Reusable pop-up confirmation alert dialog modal with transition options for safe vs. destructive/danger operations
+//
+
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AlertCircle, Trash2, X, Loader2 } from 'lucide-react';

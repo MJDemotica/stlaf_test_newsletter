@@ -1,3 +1,10 @@
+//
+// File: TermsOfService.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Public Terms of Service agreement document displaying service guidelines, user conduct rules, and legal liabilities disclaimers
+//
+
 import React from 'react';
 import { FileText, ChevronLeft } from 'lucide-react';
 import { motion } from 'motion/react';

@@ -1,3 +1,10 @@
+//
+// File: DataDeletion.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Privacy policy public resource providing instruction and verification requirements for request submission and automated info elimination
+//
+
 import React from 'react';
 import { Trash2, ChevronLeft, Mail, ShieldAlert } from 'lucide-react';
 import { motion } from 'motion/react';

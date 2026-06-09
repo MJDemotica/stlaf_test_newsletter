@@ -1,3 +1,10 @@
+//
+// File: App.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Core React application component housing main layout, routing, view switching, and sidebar navigation
+//
+
 import React, { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, 

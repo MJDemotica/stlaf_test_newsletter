@@ -1,3 +1,10 @@
+//
+// File: ComposeCampaignView.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Multi-step interactive wizard for building, styling, previewing, and scheduling personalized marketing campaigns with AI content integration
+//
+
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Send, 

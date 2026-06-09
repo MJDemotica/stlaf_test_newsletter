@@ -1,3 +1,10 @@
+//
+// File: PrivacyPolicy.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Public-facing Privacy Policy rendering disclosure documentation regarding Google API data handling, storage limits, and general transparency
+//
+
 import React from 'react';
 import { Shield, ChevronLeft } from 'lucide-react';
 import { motion } from 'motion/react';

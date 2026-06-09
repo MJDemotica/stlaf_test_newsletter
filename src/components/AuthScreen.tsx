@@ -1,3 +1,10 @@
+//
+// File: AuthScreen.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Renders the authentication gate overlay centered on Google Single Sign On, with professional, eye-safe twilight branding transitions
+//
+
 import React, { useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { Mail, Lock } from 'lucide-react';

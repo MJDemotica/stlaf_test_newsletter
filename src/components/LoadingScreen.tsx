@@ -1,3 +1,10 @@
+//
+// File: LoadingScreen.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Transition loading overlay presenting fluid progress counters, styled branding nodes, and system connection indicators
+//
+
 import React from 'react';
 import { motion } from 'motion/react';
 import { Mail } from 'lucide-react';

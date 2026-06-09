@@ -1,3 +1,10 @@
+//
+// File: PublicPortal.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Public subscriber portal rendering custom subscription flows, verification challenges, and preference/tag lists configurations
+//
+
 import React, { useState, useEffect } from 'react';
 import { 
   Mail, 

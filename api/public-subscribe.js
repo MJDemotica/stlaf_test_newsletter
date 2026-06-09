@@ -1,3 +1,10 @@
+//
+// File: public-subscribe.js
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Serverless endpoint handling new mailing list subscription registration requests, sending validation/verification emails via Gmail
+//
+
 import axios from "axios";
 
 // Intercept responses to handle 429 and rate/quota limits automatically via exponential backoff retry

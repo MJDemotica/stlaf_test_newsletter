@@ -1,3 +1,10 @@
+//
+// File: server.ts
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Main Backend Express Server hosting Gmail OAuth API, background campaign scheduler, local mock-cron endpoint, and Vite middleware
+//
+
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";

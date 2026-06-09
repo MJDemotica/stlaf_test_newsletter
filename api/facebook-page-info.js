@@ -1,3 +1,10 @@
+//
+// File: facebook-page-info.js
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Serverless route verifying Facebook Page credentials and retrieving active profile status
+//
+
 import axios from 'axios';
 
 export default async function handler(req, res) {

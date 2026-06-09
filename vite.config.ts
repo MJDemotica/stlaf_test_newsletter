@@ -1,3 +1,10 @@
+//
+// File: vite.config.ts
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Configures Vite bundler compile/build parameters, global CSS Tailwind plugin, client env injection, and absolute paths aliasing
+//
+
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';

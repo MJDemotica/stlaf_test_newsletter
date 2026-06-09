@@ -1,3 +1,10 @@
+//
+// File: NotificationDropdown.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Header navigation overlay tracking read status, critical trigger alerts, and batch delete triggers
+//
+
 import React, { useState, useEffect } from 'react';
 import { 
   Bell, 

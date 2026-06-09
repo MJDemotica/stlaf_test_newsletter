@@ -1,3 +1,10 @@
+//
+// File: firestore.rules
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Configures granular Cloud Firestore access permissions, user roles mapping rules, and schema query filters
+//
+
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {

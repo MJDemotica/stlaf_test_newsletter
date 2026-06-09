@@ -1,3 +1,10 @@
+//
+// File: hosted-images.js
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Serverless route serving and cataloging external URLs of uploaded media resources for use in email campaigns
+//
+
 import axios from 'axios';
 
 function getFirestoreUrl() {

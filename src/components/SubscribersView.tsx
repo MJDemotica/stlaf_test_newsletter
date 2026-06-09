@@ -1,3 +1,10 @@
+//
+// File: SubscribersView.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Subscribers inventory database supporting CSV bulk imports, field filtering, custom tags indexing, and subscription verification resets
+//
+
 import React, { useState, useEffect } from 'react';
 import { 
   Users, 

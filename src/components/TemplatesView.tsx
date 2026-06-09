@@ -1,3 +1,10 @@
+//
+// File: TemplatesView.tsx
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Design studio interface allowing authors to create, edit, test, delete, and reuse HTML and theme template blocks
+//
+
 import React, { useState, useEffect } from 'react';
 import { 
   FileCode, 
