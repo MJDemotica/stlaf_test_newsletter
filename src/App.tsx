@@ -33,7 +33,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Toaster, toast } from 'react-hot-toast';
-import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 
 import { ViewMode } from './types';
 import { auth, db } from './firebase';
@@ -141,6 +141,13 @@ function AppContent() {
   const [quickLinksOpen, setQuickLinksOpen] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Quick Links Stored state with default fallback links
+  const [quickLinks, setQuickLinks] = useState<{ id: string; name: string; url: string }[]>([
+    { id: '1', name: 'Marketing Assets', url: 'https://workspace.google.com' },
+    { id: '2', name: 'Notion', url: 'https://notion.so' },
+    { id: '3', name: 'Topic Bank', url: 'https://google.com' }
+  ]);
+
   // Derived Sizing
   const isSidebarExpanded = sidebarMode === 'full' || (sidebarMode === 'mini-hover' && isSidebarHovered);
   const isSidebarMini = !isSidebarExpanded;
@@ -206,6 +213,23 @@ function AppContent() {
     setNavigationData(data);
     setViewMode(view);
   };
+
+  // Listen to Quick Links settings changes from Firestore
+  useEffect(() => {
+    if (userId && profileStatus === 'active') {
+      const unsub = onSnapshot(doc(db, 'settings', 'quick_links'), (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (Array.isArray(data.links)) {
+            setQuickLinks(data.links);
+          }
+        }
+      }, (error) => {
+        console.warn("Failed to subscribe to quick links settings: ", error);
+      });
+      return () => unsub();
+    }
+  }, [userId, profileStatus]);
 
   // Action to clear postId URL query param
   const clearPostIdQueryParam = () => {
@@ -572,33 +596,23 @@ function AppContent() {
                     exit={{ height: 0, opacity: 0 }}
                     className="space-y-1.5 px-1 overflow-hidden"
                   >
-                    <a 
-                      href="https://workspace.google.com" 
-                      target="_blank" 
-                      rel="noopener noreferrer" 
-                      className="flex items-center gap-3 px-4 py-2 text-xs font-semibold text-[#8a99ad] hover:text-white hover:bg-white/5 rounded-xl transition-all"
-                    >
-                      <ExternalLink className="w-4 h-4 text-[#8a99ad]" />
-                      <span>Marketing Assets</span>
-                    </a>
-                    <a 
-                      href="https://notion.so" 
-                      target="_blank" 
-                      rel="noopener noreferrer" 
-                      className="flex items-center gap-3 px-4 py-2 text-xs font-semibold text-[#8a99ad] hover:text-white hover:bg-white/5 rounded-xl transition-all"
-                    >
-                      <ExternalLink className="w-4 h-4 text-[#8a99ad]" />
-                      <span>Notion</span>
-                    </a>
-                    <a 
-                      href="https://google.com" 
-                      target="_blank" 
-                      rel="noopener noreferrer" 
-                      className="flex items-center gap-3 px-4 py-2 text-xs font-semibold text-[#8a99ad] hover:text-white hover:bg-white/5 rounded-xl transition-all"
-                    >
-                      <ExternalLink className="w-4 h-4 text-[#8a99ad]" />
-                      <span>Topic Bank</span>
-                    </a>
+                    {quickLinks.map((link) => (
+                      <a 
+                        key={link.id}
+                        href={link.url} 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="flex items-center gap-3 px-4 py-2 text-xs font-semibold text-[#8a99ad] hover:text-white hover:bg-white/5 rounded-xl transition-all"
+                      >
+                        <ExternalLink className="w-4 h-4 text-[#8a99ad] shrink-0" />
+                        <span className="truncate">{link.name}</span>
+                      </a>
+                    ))}
+                    {quickLinks.length === 0 && (
+                      <div className="px-4 py-2 text-xs italic text-slate-500">
+                        No links added
+                      </div>
+                    )}
                   </motion.div>
                 )}
               </AnimatePresence>

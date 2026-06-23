@@ -24,7 +24,14 @@ import { RoleManager } from './RoleManager';
 import { toast } from 'react-hot-toast';
 import axios from 'axios';
 import { db, auth } from '../firebase';
-import { collection, getDocs, doc, setDoc, writeBatch } from 'firebase/firestore';
+import { 
+  collection, 
+  getDocs, 
+  getDoc,
+  doc, 
+  setDoc, 
+  writeBatch 
+} from 'firebase/firestore';
 import { BackupRestorePanel } from './BackupRestorePanel';
 
 enum OperationType {
@@ -93,6 +100,89 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ userRole }) => {
   // Clipboard copy status
   const [copiedSub, setCopiedSub] = useState(false);
   const [copiedUnsub, setCopiedUnsub] = useState(false);
+
+  // Quick Links Customizer state
+  const [quickLinks, setQuickLinks] = useState<{ id: string; name: string; url: string }[]>([]);
+  const [newLinkName, setNewLinkName] = useState('');
+  const [newLinkUrl, setNewLinkUrl] = useState('');
+  const [savingLinks, setSavingLinks] = useState(false);
+
+  // Load existing Quick Links from Firestore
+  useEffect(() => {
+    const fetchQuickLinks = async () => {
+      try {
+        const docRef = doc(db, 'settings', 'quick_links');
+        const snap = await getDoc(docRef);
+        if (snap.exists()) {
+          const data = snap.data();
+          if (Array.isArray(data.links)) {
+            setQuickLinks(data.links);
+            return;
+          }
+        }
+        // Fallback default links
+        setQuickLinks([
+          { id: '1', name: 'Marketing Assets', url: 'https://workspace.google.com' },
+          { id: '2', name: 'Notion', url: 'https://notion.so' },
+          { id: '3', name: 'Topic Bank', url: 'https://google.com' }
+        ]);
+      } catch (err) {
+        console.error("Failed to fetch quick links: ", err);
+      }
+    };
+    fetchQuickLinks();
+  }, []);
+
+  const handleAddLink = () => {
+    if (!newLinkName.trim() || !newLinkUrl.trim()) {
+      toast.error('Please enter both name and URL');
+      return;
+    }
+    let formattedUrl = newLinkUrl.trim();
+    if (!/^https?:\/\//i.test(formattedUrl)) {
+      formattedUrl = 'https://' + formattedUrl;
+    }
+
+    const newItem = {
+      id: Date.now().toString(),
+      name: newLinkName.trim(),
+      url: formattedUrl
+    };
+
+    setQuickLinks([...quickLinks, newItem]);
+    setNewLinkName('');
+    setNewLinkUrl('');
+    toast.success('Link added to list! Save to publish changes.');
+  };
+
+  const handleDeleteLink = (id: string) => {
+    setQuickLinks(quickLinks.filter(item => item.id !== id));
+    toast.success('Link removed! Save to publish changes.');
+  };
+
+  const handleUpdateLinkField = (id: string, field: 'name' | 'url', value: string) => {
+    setQuickLinks(quickLinks.map(item => {
+      if (item.id === id) {
+        return { ...item, [field]: value };
+      }
+      return item;
+    }));
+  };
+
+  const handleSaveQuickLinks = async () => {
+    setSavingLinks(true);
+    const toastId = toast.loading('Publishing quick links to sidebar...');
+    try {
+      const docRef = doc(db, 'settings', 'quick_links');
+      await setDoc(docRef, { links: quickLinks });
+      toast.success('Sidebar quick links updated successfully!', { id: toastId });
+    } catch (err) {
+      console.error('Failed to save quick links:', err);
+      toast.error('Failed to update quick links.', { id: toastId });
+    } finally {
+      setSavingLinks(false);
+    }
+  };
 
   // System Backup (JSON Export)
   const handleBackupData = async () => {
@@ -504,13 +594,120 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ userRole }) => {
 
         </div>
 
-        {/* Right Column: Portal User Role audit Manager */}
-        <div className="lg:col-span-2">
+        {/* Right Column: Portal User Role audit Manager + Quick Links Settings */}
+        <div className="lg:col-span-2 space-y-6">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 shadow-sm">
             <h2 className="font-extrabold text-sm text-slate-950 dark:text-white flex items-center gap-2 border-b border-slate-100 dark:border-slate-800 pb-3 mb-4">
               <Shield className="w-4.5 h-4.5 text-amber-500" /> Portal Permissions Auditor
             </h2>
             <RoleManager addNotification={mockToastNotifications} />
+          </div>
+
+          {/* Quick Links settings */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 shadow-sm space-y-4">
+            <h2 className="font-extrabold text-sm text-slate-950 dark:text-white flex items-center gap-2 border-b border-slate-100 dark:border-slate-800 pb-3 mb-2">
+              <ExternalLink className="w-4.5 h-4.5 text-amber-500" /> Sidebar Quick Links Settings
+            </h2>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              Add, edit, or delete links displayed in the "Quick Links" section on the main navigation sidebar. Changes update live for all active marketing supervisors and editors.
+            </p>
+
+            <div className="space-y-3 pt-2">
+              {quickLinks.map((link, index) => (
+                <div key={link.id} className="flex flex-col sm:flex-row gap-3 p-3.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl items-center">
+                  <span className="text-xs font-bold text-slate-400 shrink-0 select-none">#{index + 1}</span>
+                  <div className="w-full sm:flex-1 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider block">Link Name</label>
+                      <input 
+                        type="text" 
+                        value={link.name}
+                        onChange={(e) => handleUpdateLinkField(link.id, 'name', e.target.value)}
+                        placeholder="e.g. Assets Pool"
+                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-100 font-semibold focus:outline-none focus:ring-1 focus:ring-amber-500"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider block">Target URL</label>
+                      <input 
+                        type="text" 
+                        value={link.url}
+                        onChange={(e) => handleUpdateLinkField(link.id, 'url', e.target.value)}
+                        placeholder="e.g. https://domain.com"
+                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-100 font-mono focus:outline-none focus:ring-1 focus:ring-amber-500"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteLink(link.id)}
+                    className="mt-2 sm:mt-4 p-2 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/20 text-xs font-semibold rounded-lg transition-all shrink-0 cursor-pointer border-0 bg-transparent"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+              {quickLinks.length === 0 && (
+                <div className="p-6 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-xl text-slate-400 italic text-xs">
+                  No quick links set yet. Add new link below.
+                </div>
+              )}
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 dark:border-slate-800/80 space-y-3">
+              <h3 className="text-xs font-bold text-slate-800 dark:text-slate-200">Add New Sidebar Link</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">New Link Name</label>
+                  <input 
+                    type="text"
+                    value={newLinkName}
+                    onChange={(e) => setNewLinkName(e.target.value)}
+                    placeholder="e.g. Campaign Guidelines"
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-amber-500 font-semibold"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">New URL</label>
+                  <input 
+                    type="text"
+                    value={newLinkUrl}
+                    onChange={(e) => setNewLinkUrl(e.target.value)}
+                    placeholder="e.g. https://docs.google.com"
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-amber-500 font-mono"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end pt-1">
+                <button
+                  type="button"
+                  onClick={handleAddLink}
+                  className="px-3.5 py-1.5 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-850 text-slate-700 dark:text-slate-300 rounded-lg text-xs font-semibold transition-all cursor-pointer bg-white dark:bg-slate-900"
+                >
+                  Add Link
+                </button>
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 dark:border-slate-800/80 flex justify-end">
+              <button
+                type="button"
+                disabled={savingLinks}
+                onClick={handleSaveQuickLinks}
+                className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-white font-semibold rounded-lg text-xs shadow transition-all cursor-pointer flex items-center gap-2 border-none"
+              >
+                {savingLinks ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    Saving Changes...
+                  </>
+                ) : (
+                  <>
+                    Save Quick Links
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
 
