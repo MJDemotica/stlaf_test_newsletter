@@ -1,0 +1,94 @@
+//
+// File: firestore.rules
+// Author: Juan Dela Cruz
+// Date: 2026-06-09
+// Purpose: Configures granular Cloud Firestore access permissions, user roles mapping rules, and schema query filters
+//
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function getProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isActive() {
+      return isSignedIn() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        getProfile().status == 'active';
+    }
+
+    function isAdmin() {
+      return isActive() && getProfile().role == 'marketing_supervisor';
+    }
+
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == userId;
+      allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /roleAssignments/{assignmentId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /posts/{postId} {
+      allow read: if isActive();
+      allow write: if isActive();
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isActive() && (resource == null || !('userId' in resource.data) || resource.data.userId == null || resource.data.userId == request.auth.uid);
+      allow write: if isActive();
+    }
+
+    match /settings/{settingId} {
+      allow read: if isActive();
+      allow write: if isAdmin();
+    }
+
+    match /comments/{commentId} {
+      allow read: if isActive();
+      allow write: if isActive();
+    }
+
+    match /activityLogs/{logId} {
+      allow read: if isAdmin();
+      allow write: if isActive();
+    }
+
+    match /pinnedAssets/{pinId} {
+      allow read: if isActive() && resource.data.userId == request.auth.uid;
+      allow create: if isActive() && request.resource.data.userId == request.auth.uid;
+      allow delete: if isActive() && resource.data.userId == request.auth.uid;
+    }
+
+    match /concerns/{concernId} {
+      allow create: if isActive() && request.resource.data.userId == request.auth.uid;
+      allow read: if isAdmin() || (isActive() && resource.data.userId == request.auth.uid);
+      allow update, delete: if isAdmin();
+    }
+
+    match /emailCampaigns/{campaignId} {
+      allow read, write: if isActive();
+    }
+
+    match /subscribers/{subscriberId} {
+      allow read, write: if isActive();
+    }
+
+    match /emailLogs/{logId} {
+      allow read, write: if isActive();
+    }
+
+    match /emailTemplates/{templateId} {
+      allow read, write: if isActive();
+    }
+  }
+}
