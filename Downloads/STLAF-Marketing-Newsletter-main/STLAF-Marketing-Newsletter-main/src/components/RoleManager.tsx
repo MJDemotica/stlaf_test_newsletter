@@ -24,21 +24,22 @@ import {
   Info
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { db } from '../firebase';
-import { 
-  collection, 
-  addDoc, 
-  deleteDoc, 
-  doc, 
-  onSnapshot, 
-  query, 
-  orderBy,
-  serverTimestamp,
-  where,
-  updateDoc,
-  limit
-} from 'firebase/firestore';
+import { supabase } from '../supabase';
 import { UserRole, UserProfile } from '../types';
+
+function mapUser(row: any): UserProfile {
+  return {
+    uid: row.id,
+    email: row.email,
+    displayName: row.display_name,
+    role: row.role,
+    department: row.department,
+    status: row.status,
+    createdAt: row.created_at,
+    photoURL: row.photo_url
+  } as any;
+}
+
 
 interface RoleAssignment {
   id: string;
@@ -85,42 +86,50 @@ export const RoleManager = ({ addNotification, refreshKey }: { addNotification: 
 
   useEffect(() => {
     // 1. Fetch pre-registered assignments
-    const q1 = query(collection(db, 'roleAssignments'), orderBy('email', 'asc'), limit(100));
-    const unsubscribe1 = onSnapshot(q1, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as RoleAssignment[];
-      setAssignments(data);
+    const loadAssignments = async () => {
+      const { data } = await supabase.from('role_assignments').select('*').order('email', { ascending: true }).limit(100);
+      setAssignments((data || []).map(row => ({
+        id: row.id,
+        email: row.email,
+        role: row.role,
+        department: row.department,
+        assignedAt: row.assigned_at
+      })) as RoleAssignment[]);
       setLoading(false);
-    });
+    };
+    loadAssignments();
 
     // 2. Fetch pending users
-    const q2 = query(collection(db, 'users'), where('status', '==', 'pending'), limit(100));
-    const unsubscribe2 = onSnapshot(q2, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({
-        uid: doc.id,
-        ...doc.data()
-      })) as any as UserProfile[];
-      setPendingUsers(data);
+    const loadPending = async () => {
+      const { data } = await supabase.from('profiles').select('*').eq('status', 'pending').limit(100);
+      setPendingUsers((data || []).map(mapUser));
       setPendingLoading(false);
-    });
+    };
+    loadPending();
 
     // 3. Fetch active users
-    const q3 = query(collection(db, 'users'), where('status', '==', 'active'), limit(200));
-    const unsubscribe3 = onSnapshot(q3, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({
-        uid: doc.id,
-        ...doc.data()
-      })) as any as UserProfile[];
-      setActiveUsers(data);
+    const loadActive = async () => {
+      const { data } = await supabase.from('profiles').select('*').eq('status', 'active').limit(200);
+      setActiveUsers((data || []).map(mapUser));
       setActiveLoading(false);
-    });
+    };
+    loadActive();
+
+    // Realtime: one channel per table
+    const ch1 = supabase.channel('role-assignments-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'role_assignments' }, loadAssignments)
+      .subscribe();
+    const ch2 = supabase.channel('profiles-pending-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles', filter: 'status=eq.pending' }, loadPending)
+      .subscribe();
+    const ch3 = supabase.channel('profiles-active-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles', filter: 'status=eq.active' }, loadActive)
+      .subscribe();
 
     return () => {
-      unsubscribe1();
-      unsubscribe2();
-      unsubscribe3();
+      supabase.removeChannel(ch1);
+      supabase.removeChannel(ch2);
+      supabase.removeChannel(ch3);
     };
   }, [refreshKey]);
 
@@ -129,11 +138,12 @@ export const RoleManager = ({ addNotification, refreshKey }: { addNotification: 
 
   const handleApproveUser = async (uid: string, userEmail: string, assignedRole: UserRole, assignedDept: string) => {
     try {
-      await updateDoc(doc(db, 'users', uid), {
+      const { error } = await supabase.from('profiles').update({
         status: 'active',
         role: assignedRole,
         department: assignedDept
-      });
+      }).eq('id', uid);
+      if (error) throw error;
       addNotification('User Approved', `${userEmail} has been granted access.`, 'success');
       setApprovingUserId(null);
       setApproveValues(null);
@@ -144,8 +154,8 @@ export const RoleManager = ({ addNotification, refreshKey }: { addNotification: 
 
   const handleRejectUser = async (uid: string, userEmail: string) => {
     try {
-      // For rejection, we just delete the profile. The user won't be able to log in without a profile being pending again.
-      await deleteDoc(doc(db, 'users', uid));
+      const { error } = await supabase.from('profiles').delete().eq('id', uid);
+      if (error) throw error;
       addNotification('User Rejected', `${userEmail} request was denied.`, 'info');
       setIsRejectingUserId(null);
     } catch (err: any) {
@@ -155,14 +165,14 @@ export const RoleManager = ({ addNotification, refreshKey }: { addNotification: 
 
   const handleDeleteUser = async (uid: string, userEmail: string) => {
     try {
-      await deleteDoc(doc(db, 'users', uid));
-      
-      // Also try to find and delete their role assignment if exists
+      const { error } = await supabase.from('profiles').delete().eq('id', uid);
+      if (error) throw error;
+
       const assignment = assignments.find(a => a.email.toLowerCase() === userEmail.toLowerCase());
       if (assignment) {
-        await deleteDoc(doc(db, 'roleAssignments', assignment.id));
+        await supabase.from('role_assignments').delete().eq('id', assignment.id);
       }
-      
+
       addNotification('User Deleted', `Account profile for ${userEmail} was removed.`, 'info');
       setIsDeletingUserId(null);
     } catch (err: any) {
@@ -174,12 +184,12 @@ export const RoleManager = ({ addNotification, refreshKey }: { addNotification: 
     if (!editValues) return;
     setIsUpdating(true);
     try {
-      const userRef = doc(db, 'users', uid);
-      await updateDoc(userRef, {
+      const { error } = await supabase.from('profiles').update({
         role: editValues.role,
         department: editValues.department
-      });
-      
+      }).eq('id', uid);
+      if (error) throw error;
+
       setEditingUserId(null);
       setEditValues(null);
       addNotification('Success', 'User profile updated successfully', 'success');
@@ -197,13 +207,13 @@ export const RoleManager = ({ addNotification, refreshKey }: { addNotification: 
 
     setIsSubmitting(true);
     try {
-      await addDoc(collection(db, 'roleAssignments'), {
+      const { error } = await supabase.from('role_assignments').insert({
         email: email.toLowerCase().trim(),
         role,
-        department,
-        assignedAt: serverTimestamp()
+        department
       });
-      
+      if (error) throw error;
+
       addNotification('User Registered', `${email} has been assigned the ${role} role.`, 'success');
       setEmail('');
       setIsAdding(false);
@@ -217,7 +227,8 @@ export const RoleManager = ({ addNotification, refreshKey }: { addNotification: 
 
   const handleDelete = async (id: string, userEmail: string) => {
     try {
-      await deleteDoc(doc(db, 'roleAssignments', id));
+      const { error } = await supabase.from('role_assignments').delete().eq('id', id);
+      if (error) throw error;
       addNotification('Assignment Removed', `Role assignment for ${userEmail} deleted.`, 'info');
       setIsDeletingAssignmentId(null);
     } catch (err: any) {

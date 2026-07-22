@@ -5,7 +5,9 @@
 // Purpose: Serverless route verifying Facebook Page credentials and retrieving active profile status
 //
 
-import axios from 'axios';
+import { createClient } from '@supabase/supabase-js';
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SECRET_KEY);
+import axios from "axios";
 
 export default async function handler(req, res) {
   const PAGE_ACCESS_TOKEN = process.env.FACEBOOK_PAGE_ACCESS_TOKEN;

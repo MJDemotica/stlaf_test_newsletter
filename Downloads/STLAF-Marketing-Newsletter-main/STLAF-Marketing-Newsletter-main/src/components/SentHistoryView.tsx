@@ -18,9 +18,41 @@ import {
   FileText,
   Clock 
 } from 'lucide-react';
-import { collection, onSnapshot, getDocs, doc, setDoc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { supabase } from '../supabase';
 import { EmailLog, EmailCampaign } from '../types';
+
+function mapCampaign(row: any): EmailCampaign {
+  return {
+    id: row.id,
+    title: row.title,
+    subject: row.subject,
+    body: row.body,
+    status: row.status,
+    type: row.type,
+    recipientTags: row.recipient_tags || [],
+    scheduledAt: row.scheduled_at,
+    sentAt: row.sent_at,
+    sentCount: row.sent_count || 0,
+    failedCount: row.failed_count || 0,
+    createdBy: row.created_by,
+    createdAt: row.created_at,
+    attachmentsJson: row.attachments_json,
+    importedPostId: row.imported_post_id
+  };
+}
+
+function mapLog(row: any): EmailLog {
+  return {
+    id: row.id,
+    campaignId: row.campaign_id,
+    recipientEmail: row.recipient_email,
+    status: row.status,
+    errorMessage: row.error_message,
+    sentAt: row.sent_at,
+    gmailMessageId: row.gmail_message_id
+  };
+}
+
 import { toast } from 'react-hot-toast';
 import axios from 'axios';
 
@@ -33,30 +65,39 @@ export const SentHistoryView: React.FC = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Read campaigns for dropdown filters
-    const unsubCampaigns = onSnapshot(collection(db, 'emailCampaigns'), (snapshot) => {
-      const list: EmailCampaign[] = [];
-      snapshot.forEach(doc => {
-        list.push({ ...(doc.data() as EmailCampaign), id: doc.id });
-      });
-      list.sort((a,b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      setCampaigns(list);
-    });
+    const loadCampaigns = async () => {
+      const { data } = await supabase
+        .from('email_campaigns')
+        .select('*')
+        .order('created_at', { ascending: false });
+      setCampaigns((data || []).map(mapCampaign));
+    };
 
-    // Read general stream of logs
-    const unsubLogs = onSnapshot(collection(db, 'emailLogs'), (snapshot) => {
-      const list: EmailLog[] = [];
-      snapshot.forEach(doc => {
-        list.push({ ...(doc.data() as EmailLog), id: doc.id });
-      });
-      list.sort((a,b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime());
-      setLogs(list);
+    const loadLogs = async () => {
+      const { data } = await supabase
+        .from('email_logs')
+        .select('*')
+        .order('sent_at', { ascending: false });
+      setLogs((data || []).map(mapLog));
       setLoading(false);
-    });
+    };
+
+    loadCampaigns();
+    loadLogs();
+
+    const campaignsChannel = supabase
+      .channel('sent-history-campaigns')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'email_campaigns' }, loadCampaigns)
+      .subscribe();
+
+    const logsChannel = supabase
+      .channel('sent-history-logs')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'email_logs' }, loadLogs)
+      .subscribe();
 
     return () => {
-      unsubCampaigns();
-      unsubLogs();
+      supabase.removeChannel(campaignsChannel);
+      supabase.removeChannel(logsChannel);
     };
   }, []);
 
@@ -92,11 +133,10 @@ export const SentHistoryView: React.FC = () => {
     
     // Fetch from subscribers collection to get the corresponding names if possible
     try {
-      const subSnapshot = await getDocs(collection(db, 'subscribers'));
+      const { data: subsData } = await supabase.from('subscribers').select('email, name');
       const activeSubs: Record<string, string> = {};
-      subSnapshot.forEach(doc => {
-        const data = doc.data();
-        activeSubs[data.email] = data.name || data.email;
+      (subsData || []).forEach(s => {
+        activeSubs[s.email] = s.name || s.email;
       });
 
       const retryRecipients = failedForCamp.map(log => ({

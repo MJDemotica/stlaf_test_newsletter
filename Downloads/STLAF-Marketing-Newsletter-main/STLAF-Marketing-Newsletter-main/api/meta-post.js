@@ -5,6 +5,8 @@
 // Purpose: Serverless API gateway dispatching simultaneous social media posts to page feeds or IG container pipelines via Meta Graph API
 //
 
+import { createClient } from '@supabase/supabase-js';
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SECRET_KEY);
 import axios from 'axios';
 import FormData from 'form-data';
 

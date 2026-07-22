@@ -5,90 +5,11 @@
 // Purpose: Serverless endpoint handling new mailing list subscription registration requests, sending validation/verification emails via Gmail
 //
 
+import { createClient } from '@supabase/supabase-js';
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SECRET_KEY);
 import axios from "axios";
 
-// Intercept responses to handle 429 and rate/quota limits automatically via exponential backoff retry
-axios.interceptors.response.use(
-  (response) => {
-    return response;
-  },
-  async (error) => {
-    const config = error.config;
-    const status = error.response?.status;
-    const errorMsg = error.response?.data?.error?.message || error.message || "";
-    
-    const isRateLimit = status === 429 || errorMsg.includes("Quota exceeded") || errorMsg.includes("RESOURCE_EXHAUSTED");
-    
-    if (isRateLimit && config) {
-      config._retryCount = config._retryCount || 0;
-      const maxRetries = 3;
-      if (config._retryCount < maxRetries) {
-        config._retryCount += 1;
-        const delay = Math.pow(2, config._retryCount) * 1000 + Math.floor(Math.random() * 500);
-        console.warn(`[AXIOS ERROR 429/QUOTA] Rate limit or quota exceeded for ${config.url}. Retrying in ${delay}ms... (Attempt ${config._retryCount} of ${maxRetries})`);
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        return axios(config);
-      }
-    }
-    return Promise.reject(error);
-  }
-);
-
-// ── FIRESTORE REST HELPERS ───────────────────────────────────────────────────
-
-function getFirestoreUrl() {
-  const projectId = process.env.VITE_FIREBASE_PROJECT_ID;
-  const databaseId = process.env.VITE_FIREBASE_DATABASE_ID || "(default)";
-  return `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${databaseId}/documents`;
-}
-
-function getApiKeyParam() {
-  const apiKey = process.env.VITE_FIREBASE_API_KEY;
-  return apiKey ? `?key=${apiKey}` : "";
-}
-
-function getFirestoreRestUrl(collectionPath, extraParams = "") {
-  const baseUrl = getFirestoreUrl();
-  let url = `${baseUrl}/${collectionPath}${getApiKeyParam()}`;
-  if (extraParams) {
-    url += url.includes("?") ? `&${extraParams}` : `?${extraParams}`;
-  }
-  return url;
-}
-
-function toFirestoreJSON(obj) {
-  const fields = {};
-  for (const [key, val] of Object.entries(obj)) {
-    if (typeof val === 'boolean') fields[key] = { booleanValue: val };
-    else if (typeof val === 'number') fields[key] = { doubleValue: val };
-    else if (Array.isArray(val)) {
-      fields[key] = {
-        arrayValue: {
-          values: val.map(item => {
-            if (typeof item === 'boolean') return { booleanValue: item };
-            if (typeof item === 'number') return { doubleValue: item };
-            return { stringValue: String(item) };
-          })
-        }
-      };
-    } else fields[key] = { stringValue: String(val || '') };
-  }
-  return { fields };
-}
-
-function fromFirestoreJSON(doc) {
-  if (!doc || !doc.fields) return null;
-  const obj = {};
-  for (const [key, vo] of Object.entries(doc.fields)) {
-    if (vo.booleanValue !== undefined) obj[key] = vo.booleanValue;
-    else if (vo.doubleValue !== undefined) obj[key] = Number(vo.doubleValue);
-    else if (vo.integerValue !== undefined) obj[key] = Number(vo.integerValue);
-    else if (vo.stringValue !== undefined) obj[key] = vo.stringValue;
-    else if (vo.arrayValue) obj[key] = vo.arrayValue.values ? vo.arrayValue.values.map(v => v.booleanValue ?? v.doubleValue ?? v.integerValue ?? v.stringValue ?? '') : [];
-    else obj[key] = JSON.stringify(vo);
-  }
-  return obj;
-}
+// ── GMAIL UTILS ─────────────────────────────────────────────────────────────
 
 // ── GMAIL UTILS ─────────────────────────────────────────────────────────────
 
@@ -103,39 +24,38 @@ async function getGmailConfig() {
   if (activeGmailConfigPromise) {
     return activeGmailConfigPromise;
   }
-  
-  const url = `${getFirestoreUrl()}/settings/gmail_config${getApiKeyParam()}`;
+
   activeGmailConfigPromise = (async () => {
     try {
-      const resp = await axios.get(url);
-      cachedGmailConfig = fromFirestoreJSON(resp.data);
+      const { data, error } = await supabase
+        .from('settings')
+        .select('*')
+        .eq('key', 'gmail_config')
+        .maybeSingle();
+      if (error || !data) return { connected: false };
+      cachedGmailConfig = data.value;
       lastGmailConfigFetch = Date.now();
       return cachedGmailConfig;
     } catch (err) {
-      if (err.response?.status === 404) {
-        return { connected: false };
-      }
-      console.error("Error reading Gmail config from Firestore REST:", err.message);
+      console.error("Error reading Gmail config from Supabase:", err.message);
       return { connected: false };
     } finally {
       activeGmailConfigPromise = null;
     }
   })();
-  
+
   return activeGmailConfigPromise;
 }
 
 async function saveGmailConfig(config) {
-  const baseUrl = getFirestoreUrl();
-  const apiKey = getApiKeyParam();
-  const url = `${baseUrl}/settings/gmail_config${apiKey}`;
-  const docData = toFirestoreJSON(config);
   try {
-    await axios.patch(url, docData);
     cachedGmailConfig = Object.assign({}, cachedGmailConfig || {}, config);
     lastGmailConfigFetch = Date.now();
+    await supabase
+      .from('settings')
+      .upsert({ key: 'gmail_config', value: cachedGmailConfig }, { onConflict: 'key' });
   } catch (err) {
-    console.error("Error saving Gmail config to Firestore REST:", err.response?.data || err.message);
+    console.error("Error saving Gmail config to Supabase:", err.message);
     throw err;
   }
 }
@@ -252,28 +172,23 @@ export default async function handler(req, res) {
   }
 
   try {
-    // 1. Fetch all subscribers to see if email already exists
-    const subUrl = getFirestoreRestUrl("subscribers", "pageSize=300");
-    const subResp = await axios.get(subUrl);
-    const allDocs = subResp.data?.documents || [];
-    const subscribers = allDocs.map((d) => {
-      const sId = d.name.split("/").pop();
-      return { id: sId, ...fromFirestoreJSON(d) };
-    });
+    const finalTags = Array.isArray(tags) ? tags : ['Newsletter'];
 
-    const existing = subscribers.find((s) => s.email && s.email.toLowerCase() === email.toLowerCase());
-    const finalTags = Array.isArray(tags) ? tags : ["Newsletter"];
+    const { data: existing } = await supabase
+      .from('subscribers')
+      .select('*')
+      .ilike('email', email)
+      .maybeSingle();
 
-    // Setup verification properties
-    const verificationToken = Math.random().toString(36).substring(2) + Math.random().toString(36).substring(2);
-    const verificationExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24 hours expiry
+    const verificationToken = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    const verificationExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
     // Calculate verification URL
     const protocol = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
     const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
     let hostUrl = `${protocol}://${host}`;
-    if (hostUrl.includes("run.app") && !hostUrl.startsWith("https://")) {
-      hostUrl = hostUrl.replace("http://", "https://");
+    if (hostUrl.includes('run.app') && !hostUrl.startsWith('https://')) {
+      hostUrl = hostUrl.replace('http://', 'https://');
     }
     const verificationUrl = `${hostUrl}/api/public/verify?token=${verificationToken}&email=${encodeURIComponent(email)}`;
 
@@ -282,13 +197,10 @@ export default async function handler(req, res) {
     const config = await getGmailConfig();
     const isGmailConnected = config && config.connected && config.authorizedEmail;
 
-    // Always require verification (status: "pending") to enforce double opt-in GDPR compliance
-    const targetStatus = "pending";
-
     if (isGmailConnected) {
       try {
         const accessToken = await getOrRefreshAccessToken(config);
-        const subject = "Please verify your subscription";
+        const subject = 'Please verify your subscription';
         const bodyHtml = `
           <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 25px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
             <h2 style="color: #0f172a; margin-top: 0; font-size: 20px; font-weight: 700;">Welcome to the STLAF Newsletter, ${name}!</h2>
@@ -302,7 +214,7 @@ export default async function handler(req, res) {
             </div>
             <p style="color: #64748b; font-size: 12px; line-height: 1.5; background-color: #f8fafc; padding: 10px; border-radius: 6px;">
               Link not working? Copy and paste this directly into your browser address bar:<br/>
-              <a href="${verificationUrl}" style="color: #bf8d1a; text-decoration: underline; break-all: break-all; font-family: monospace; font-size: 11px;">${verificationUrl}</a>
+              <a href="${verificationUrl}" style="color: #bf8d1a; text-decoration: underline; font-family: monospace; font-size: 11px;">${verificationUrl}</a>
             </p>
             <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
             <p style="color: #94a3b8; font-size: 11px; line-height: 1.4;">
@@ -312,73 +224,48 @@ export default async function handler(req, res) {
         `;
         const rawMessage = buildMimeMessage(email, config.authorizedEmail, subject, bodyHtml);
         await axios.post(
-          "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+          'https://gmail.googleapis.com/gmail/v1/users/me/messages/send',
           { raw: rawMessage },
-          { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
+          { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
         );
         emailSent = true;
         console.log(`[PUBLIC SUBSCRIPTION] Verification link sent to ${email}`);
       } catch (mailErr) {
-        console.error("[PUBLIC MAIL SEND ERR] Failed to send verification mail:", mailErr.response?.data || mailErr.message);
+        console.error('[PUBLIC MAIL SEND ERR] Failed to send verification mail:', mailErr.response?.data || mailErr.message);
       }
     }
 
     if (existing) {
-      // Merge tags
-      let subTags = [];
-      if (Array.isArray(existing.tags)) {
-        subTags = existing.tags;
-      } else if (typeof existing.tags === 'string') {
-        try {
-          subTags = JSON.parse(existing.tags);
-        } catch(e) {
-          subTags = [existing.tags];
-        }
-      }
-      const mergedTags = Array.from(new Set([...subTags, ...finalTags]));
-      
-      const updated = {
-        ...existing,
+      const mergedTags = Array.from(new Set([...(existing.tags || []), ...finalTags]));
+      await supabase.from('subscribers').update({
         name: name || existing.name,
-        status: targetStatus,
+        status: 'pending',
         tags: mergedTags,
-        verificationToken,
-        verificationExpiresAt
-      };
-
-      const patchUrl = getFirestoreRestUrl(`subscribers/${existing.id}`);
-      await axios.patch(patchUrl, toFirestoreJSON(updated));
+        verification_token: verificationToken,
+        verification_expires_at: verificationExpiresAt
+      }).eq('id', existing.id);
       console.log(`[PUBLIC SUBSCRIPTION] Updated subscriber to pending state: ${email}`);
     } else {
-      // Create new subscriber
-      const newSub = {
-        name,
-        email,
-        status: targetStatus,
-        tags: finalTags,
-        addedAt: new Date().toISOString(),
-        addedBy: "public-portal",
-        verificationToken,
-        verificationExpiresAt
-      };
-      const postUrl = getFirestoreRestUrl("subscribers");
-      await axios.post(postUrl, toFirestoreJSON(newSub));
+      await supabase.from('subscribers').insert({
+        name, email, status: 'pending', tags: finalTags,
+        added_by: 'public-portal',
+        verification_token: verificationToken,
+        verification_expires_at: verificationExpiresAt
+      });
       console.log(`[PUBLIC SUBSCRIPTION] Added new unverified pending subscriber: ${email}`);
     }
 
-    // Capture system/user notification in the isolated notifications database
+    // Capture system/user notification in Supabase
     try {
-      const newNotify = {
-        title: "New Subscription Request 📬",
+      await supabase.from('notifications').insert({
+        title: 'New Subscription Request 📬',
         message: `${email} requested to subscribe (${name}). Verification link sent.`,
-        type: "info",
+        type: 'info',
         read: false,
-        createdAt: new Date().toISOString()
-      };
-      const notifyUrl = getFirestoreRestUrl("notifications");
-      await axios.post(notifyUrl, toFirestoreJSON(newNotify));
+        created_at: new Date().toISOString()
+      });
     } catch (err) {
-      console.warn("Could not post system notification:", err.message);
+      console.warn('Could not post system notification:', err.message);
     }
 
     return res.status(200).json({ 

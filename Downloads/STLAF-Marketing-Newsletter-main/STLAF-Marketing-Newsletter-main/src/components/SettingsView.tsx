@@ -23,61 +23,20 @@ import {
 import { RoleManager } from './RoleManager';
 import { toast } from 'react-hot-toast';
 import axios from 'axios';
-import { db, auth } from '../firebase';
-import { 
-  collection, 
-  getDocs, 
-  getDoc,
-  doc, 
-  setDoc, 
-  writeBatch 
-} from 'firebase/firestore';
+import { supabase } from '../supabase';
+
 import { BackupRestorePanel } from './BackupRestorePanel';
 
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
 
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
-    tenantId?: string | null;
-    providerInfo?: {
-      providerId?: string | null;
-      email?: string | null;
-    }[];
-  }
-}
 
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
+
+function handleSupabaseError(error: unknown, operationType: string, path: string | null) {
+  const errInfo = {
     error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData?.map(provider => ({
-        providerId: provider.providerId,
-        email: provider.email,
-      })) || []
-    },
     operationType,
     path
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  console.error('Supabase Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
 
@@ -107,18 +66,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ userRole }) => {
   const [newLinkUrl, setNewLinkUrl] = useState('');
   const [savingLinks, setSavingLinks] = useState(false);
 
-  // Load existing Quick Links from Firestore
+  // Load existing Quick Links from Supabase
   useEffect(() => {
     const fetchQuickLinks = async () => {
       try {
-        const docRef = doc(db, 'settings', 'quick_links');
-        const snap = await getDoc(docRef);
-        if (snap.exists()) {
-          const data = snap.data();
-          if (Array.isArray(data.links)) {
-            setQuickLinks(data.links);
-            return;
-          }
+        const { data } = await supabase
+          .from('settings')
+          .select('value')
+          .eq('key', 'quick_links')
+          .maybeSingle();
+        if (data && Array.isArray(data.value?.links)) {
+          setQuickLinks(data.value.links);
+          return;
         }
         // Fallback default links
         setQuickLinks([
@@ -173,8 +132,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ userRole }) => {
     setSavingLinks(true);
     const toastId = toast.loading('Publishing quick links to sidebar...');
     try {
-      const docRef = doc(db, 'settings', 'quick_links');
-      await setDoc(docRef, { links: quickLinks });
+      await supabase.from('settings').upsert({ key: 'quick_links', value: { links: quickLinks } });
       toast.success('Sidebar quick links updated successfully!', { id: toastId });
     } catch (err) {
       console.error('Failed to save quick links:', err);
@@ -184,52 +142,50 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ userRole }) => {
     }
   };
 
-  // System Backup (JSON Export)
+  // System Backup (JSON Export) — reads all tables via Supabase
   const handleBackupData = async () => {
     const toastId = toast.loading('Querying database collections...');
     try {
       const backupData: Record<string, any[]> = {};
-      const collections = [
+      const tables = [
         'subscribers',
-        'emailCampaigns',
-        'emailTemplates',
-        'emailLogs',
+        'email_campaigns',
+        'email_templates',
+        'email_logs',
         'concerns',
-        'roleAssignments',
+        'role_assignments',
         'users',
         'posts',
         'notifications',
         'settings',
         'comments'
       ];
-      
-      for (const colName of collections) {
+
+      for (const table of tables) {
         try {
-          const snapshot = await getDocs(collection(db, colName));
-          backupData[colName] = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          }));
-        } catch (e) {
-          console.warn(`Collection failed to fetch during backup: ${colName}`, e);
-          if (e && typeof e === 'object' && 'code' in e && e.code === 'permission-denied') {
-            handleFirestoreError(e, OperationType.GET, colName);
+          const { data, error } = await supabase.from(table).select('*');
+          if (error) {
+            console.warn(`Table failed to fetch during backup: ${table}`, error);
+          } else {
+            backupData[table] = data || [];
           }
+        } catch (e) {
+          console.warn(`Table failed to fetch during backup: ${table}`, e);
         }
       }
 
       const dataStr = JSON.stringify(backupData, null, 2);
       const blob = new Blob([dataStr], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
-      
+
       const exportFileName = `full_system_backup_${new Date().toISOString().slice(0, 10)}.json`;
-      
+
       const linkElement = document.createElement('a');
       linkElement.setAttribute('id', 'temp-download-link');
       linkElement.setAttribute('href', url);
       linkElement.setAttribute('download', exportFileName);
       linkElement.click();
-      
+
       URL.revokeObjectURL(url);
       toast.success('Backup snapshot downloaded!', { id: toastId });
     } catch (error) {
@@ -238,7 +194,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ userRole }) => {
     }
   };
 
-  // Restore from Backup
+  // Restore from Backup — upserts rows into each Supabase table
   const handleRestoreData = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -258,20 +214,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ userRole }) => {
         const backupData = JSON.parse(event.target?.result as string);
         let restoreCount = 0;
 
-        for (const [colName, docs] of Object.entries(backupData)) {
-          if (!Array.isArray(docs)) continue;
-          
-          toast.loading(`Restoring ${colName}...`, { id: toastId });
-          
-          for (const docData of docs) {
-            const { id, ...data } = docData;
-            if (!id) continue;
-            
+        for (const [tableName, rows] of Object.entries(backupData)) {
+          if (!Array.isArray(rows)) continue;
+
+          toast.loading(`Restoring ${tableName}...`, { id: toastId });
+
+          for (const rowData of rows) {
+            if (!rowData.id) continue;
             try {
-              await setDoc(doc(db, colName, id), data);
+              await supabase.from(tableName).upsert(rowData);
               restoreCount++;
             } catch (err) {
-              handleFirestoreError(err, OperationType.WRITE, `${colName}/${id}`);
+              handleSupabaseError(err, 'WRITE', `${tableName}/${rowData.id}`);
             }
           }
         }
@@ -287,36 +241,32 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ userRole }) => {
     reader.readAsText(file);
   };
 
-  // Destructive Collection Purge
+  // Destructive Table Purge
   const handleLegacyReset = async () => {
-    const collectionsToClear = [
-      'emailCampaigns', 
-      'emailLogs', 
-      'concerns', 
-      'posts', 
-      'notifications', 
+    const tablesToClear = [
+      'email_campaigns',
+      'email_logs',
+      'concerns',
+      'posts',
+      'notifications',
       'comments'
     ];
-    
+
     const toastId = toast.loading('Purging lists...');
     try {
       let totalDeleted = 0;
-      for (const colName of collectionsToClear) {
+      for (const table of tablesToClear) {
         try {
-          const snapshot = await getDocs(collection(db, colName));
-          if (snapshot.empty) continue;
-          
-          const batch = writeBatch(db);
-          snapshot.forEach((doc) => {
-            batch.delete(doc.ref);
-            totalDeleted++;
-          });
-          await batch.commit();
+          // Count rows first so we can report the total
+          const { count } = await supabase.from(table).select('*', { count: 'exact', head: true });
+          if (!count) continue;
+          await supabase.from(table).delete().neq('id', '');
+          totalDeleted += count;
         } catch (err) {
-          handleFirestoreError(err, OperationType.DELETE, colName);
+          handleSupabaseError(err, 'DELETE', table);
         }
       }
-      
+
       toast.success(`Database lists purged correctly. Deleted ${totalDeleted} documents.`, { id: toastId });
     } catch (err) {
       console.error(err);

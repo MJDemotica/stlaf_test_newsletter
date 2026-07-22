@@ -5,93 +5,11 @@
 // Purpose: Serverless Gmail OAuth setup routines, redirect callback, status inspection, and token verification
 //
 
-import axios from "axios";
+import { createClient } from '@supabase/supabase-js';
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SECRET_KEY);
+import axios from 'axios';
 
-// Intercept responses to handle 429 and rate/quota limits automatically via exponential backoff retry
-axios.interceptors.response.use(
-  (response) => {
-    return response;
-  },
-  async (error) => {
-    const config = error.config;
-    const status = error.response?.status;
-    const errorMsg = error.response?.data?.error?.message || error.message || "";
-    
-    const isRateLimit = status === 429 || errorMsg.includes("Quota exceeded") || errorMsg.includes("RESOURCE_EXHAUSTED");
-    
-    if (isRateLimit && config) {
-      config._retryCount = config._retryCount || 0;
-      const maxRetries = 3;
-      if (config._retryCount < maxRetries) {
-        config._retryCount += 1;
-        const delay = Math.pow(2, config._retryCount) * 1000 + Math.floor(Math.random() * 500);
-        console.warn(`[AXIOS ERROR 429/QUOTA] Rate limit or quota exceeded for ${config.url}. Retrying in ${delay}ms... (Attempt ${config._retryCount} of ${maxRetries})`);
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        return axios(config);
-      }
-    }
-    return Promise.reject(error);
-  }
-);
-
-// ── FIRESTORE REST HELPERS ───────────────────────────────────────────────────
-
-function getFirestoreUrl() {
-  const projectId = process.env.VITE_FIREBASE_PROJECT_ID;
-  const databaseId = process.env.VITE_FIREBASE_DATABASE_ID || "(default)";
-  return `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${databaseId}/documents`;
-}
-
-function getApiKeyParam() {
-  const apiKey = process.env.VITE_FIREBASE_API_KEY;
-  return apiKey ? `?key=${apiKey}` : "";
-}
-
-function toFirestoreJSON(obj) {
-  const fields = {};
-  for (const [key, val] of Object.entries(obj)) {
-    if (typeof val === 'boolean') {
-      fields[key] = { booleanValue: val };
-    } else if (typeof val === 'number') {
-      fields[key] = { doubleValue: val };
-    } else if (Array.isArray(val)) {
-      fields[key] = {
-        arrayValue: {
-          values: val.map(item => {
-            if (typeof item === 'boolean') return { booleanValue: item };
-            if (typeof item === 'number') return { doubleValue: item };
-            return { stringValue: String(item) };
-          })
-        }
-      };
-    } else {
-      fields[key] = { stringValue: String(val || '') };
-    }
-  }
-  return { fields };
-}
-
-function fromFirestoreJSON(doc) {
-  if (!doc || !doc.fields) return null;
-  const obj = {};
-  for (const [key, valObj] of Object.entries(doc.fields)) {
-    const vo = valObj;
-    if (vo.booleanValue !== undefined) {
-      obj[key] = vo.booleanValue;
-    } else if (vo.doubleValue !== undefined) {
-      obj[key] = Number(vo.doubleValue);
-    } else if (vo.integerValue !== undefined) {
-      obj[key] = Number(vo.integerValue);
-    } else if (vo.stringValue !== undefined) {
-      obj[key] = vo.stringValue;
-    } else if (vo.arrayValue) {
-      obj[key] = vo.arrayValue.values ? vo.arrayValue.values.map((v) => v.booleanValue ?? v.doubleValue ?? v.integerValue ?? v.stringValue ?? '') : [];
-    } else {
-      obj[key] = JSON.stringify(vo);
-    }
-  }
-  return obj;
-}
+// ── GMAIL CONFIG (Supabase) ────────────────────────────────────────────────────
 
 let cachedGmailConfig = null;
 let lastGmailConfigFetch = 0;
@@ -104,89 +22,67 @@ async function getGmailConfig() {
   if (activeGmailConfigPromise) {
     return activeGmailConfigPromise;
   }
-  
-  const url = `${getFirestoreUrl()}/settings/gmail_config${getApiKeyParam()}`;
+
   activeGmailConfigPromise = (async () => {
     try {
-      const resp = await axios.get(url);
-      cachedGmailConfig = fromFirestoreJSON(resp.data);
+      const { data } = await supabase
+        .from('gmail_config')
+        .select('*')
+        .eq('id', 1)
+        .maybeSingle();
+      cachedGmailConfig = data || { connected: false };
       lastGmailConfigFetch = Date.now();
       return cachedGmailConfig;
     } catch (err) {
-      if (err.response?.status === 404) {
-        return { connected: false };
-      }
-      console.error("Error reading Gmail config from Firestore REST:", err.message);
+      console.error('Error reading Gmail config from Supabase:', err.message);
       return { connected: false };
     } finally {
       activeGmailConfigPromise = null;
     }
   })();
-  
+
   return activeGmailConfigPromise;
 }
 
 async function saveGmailConfig(config) {
-  const baseUrl = getFirestoreUrl();
-  const apiKey = getApiKeyParam();
-  const url = `${baseUrl}/settings/gmail_config${apiKey}`;
-  const docData = toFirestoreJSON(config);
   try {
-    await axios.patch(url, docData);
+    await supabase.from('gmail_config').update({
+      connected: config.connected,
+      authorized_email: config.authorizedEmail,
+      access_token: config.accessToken,
+      refresh_token: config.refreshToken,
+      token_expiry: config.tokenExpiry
+    }).eq('id', 1);
     cachedGmailConfig = Object.assign({}, cachedGmailConfig || {}, config);
     lastGmailConfigFetch = Date.now();
   } catch (err) {
-    console.error("Error saving Gmail config to Firestore REST:", err.response?.data || err.message);
+    console.error('Error saving Gmail config to Supabase:', err.message);
     throw err;
   }
 }
 
 async function createEmailLog(campaignId, recipientEmail, details) {
-  const baseUrl = getFirestoreUrl();
-  const apiKey = getApiKeyParam();
-  const url = `${baseUrl}/emailLogs${apiKey}`;
-  const logData = {
-    campaignId,
-    recipientEmail,
-    ...details
-  };
-  const docData = toFirestoreJSON(logData);
   try {
-    await axios.post(url, docData);
+    await supabase.from('email_logs').insert({
+      campaign_id: campaignId,
+      recipient_email: recipientEmail,
+      status: details.status,
+      error_message: details.errorMessage || null,
+      sent_at: details.sentAt,
+      gmail_message_id: details.gmailMessageId || null
+    });
   } catch (err) {
-    console.error("Error saving Email Log to Firestore REST:", err.response?.data || err.message);
+    console.error('Error saving Email Log to Supabase:', err.message);
   }
 }
 
 async function updateCampaignCount(campaignId, status, sentCount, failedCount) {
-  const baseUrl = getFirestoreUrl();
-  const apiKey = getApiKeyParam();
-  
-  const updateMaskParams = [
-    'updateMask.fieldPaths=status',
-    'updateMask.fieldPaths=sentCount',
-    'updateMask.fieldPaths=failedCount'
-  ];
-  
-  const fields = {
-    status: { stringValue: status },
-    sentCount: { doubleValue: Number(sentCount) },
-    failedCount: { doubleValue: Number(failedCount) }
-  };
-
-  if (status === 'sent') {
-    updateMaskParams.push('updateMask.fieldPaths=sentAt');
-    fields.sentAt = { stringValue: new Date().toISOString() };
-  }
-
-  const keyParam = apiKey ? apiKey.replace('?', '') + '&' : '';
-  const url = `${baseUrl}/emailCampaigns/${campaignId}?${keyParam}${updateMaskParams.join('&')}`;
-  const docData = { fields };
-
+  const updates = { status, sent_count: sentCount, failed_count: failedCount };
+  if (status === 'sent') updates.sent_at = new Date().toISOString();
   try {
-    await axios.patch(url, docData);
+    await supabase.from('email_campaigns').update(updates).eq('id', campaignId);
   } catch (err) {
-    console.error(`Error updating emailCampaigns/${campaignId}:`, err.response?.data || err.message);
+    console.error(`Error updating email_campaigns/${campaignId}:`, err.message);
   }
 }
 
@@ -502,20 +398,24 @@ export default async function handler(req, res) {
       }
       const accessToken = await getOrRefreshAccessToken(config);
       
-      const campaignUrl = `${getFirestoreUrl()}/emailCampaigns/${campaignId}${getApiKeyParam()}`;
-      const campaignResp = await axios.get(campaignUrl);
-      const campaign = fromFirestoreJSON(campaignResp.data);
+      const { data: campaign } = await supabase
+        .from('email_campaigns')
+        .select('*')
+        .eq('id', campaignId)
+        .maybeSingle();
       if (!campaign) {
-        return res.status(404).json({ error: "Campaign not found." });
+        return res.status(404).json({ error: 'Campaign not found.' });
       }
 
-      // Parse campaign-level attachments
+      // Parse campaign-level attachments (stored as JSONB or JSON string)
       let attachments = [];
-      if (campaign?.attachmentsJson) {
+      if (campaign?.attachments_json) {
         try {
-          attachments = JSON.parse(campaign.attachmentsJson);
+          attachments = typeof campaign.attachments_json === 'string'
+            ? JSON.parse(campaign.attachments_json)
+            : campaign.attachments_json;
         } catch (e) {
-          console.error("Error parsing campaign attachmentsJson:", e);
+          console.error('Error parsing campaign attachments_json:', e);
         }
       }
       
@@ -533,14 +433,14 @@ export default async function handler(req, res) {
       const hostUrl = `${protocol}://${host}`;
 
       for (const rec of recipients) {
-        const subject = (campaign.subject || "")
-          .replace(/{{name}}/gi, rec.name || "")
-          .replace(/{{email}}/gi, rec.email || "");
+        const subject = (campaign.subject || '')
+          .replace(/{{name}}/gi, rec.name || '')
+          .replace(/{{email}}/gi, rec.email || '');
 
         const unsubscribeUrl = `${hostUrl}/unsubscribe?email=${encodeURIComponent(rec.email)}`;
-        let body = (campaign.body || "")
-          .replace(/{{name}}/gi, rec.name || "")
-          .replace(/{{email}}/gi, rec.email || "");
+        let body = (campaign.body || '')
+          .replace(/{{name}}/gi, rec.name || '')
+          .replace(/{{email}}/gi, rec.email || '');
 
         if (/{{unsubscribe}}/i.test(body)) {
           body = body.replace(/{{unsubscribe}}/gi, unsubscribeUrl);

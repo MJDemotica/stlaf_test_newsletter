@@ -29,9 +29,26 @@ import {
   CheckSquare,
   ClipboardList
 } from 'lucide-react';
-import { collection, onSnapshot, doc, setDoc, addDoc, deleteDoc, writeBatch } from 'firebase/firestore';
-import { db, auth } from '../firebase';
+import { supabase } from '../supabase';
 import { Subscriber } from '../types';
+
+function mapSubscriber(row: any): Subscriber {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    status: row.status,
+    tags: row.tags || [],
+    addedAt: row.added_at,
+    addedBy: row.added_by,
+    unsubscribeReason: row.unsubscribe_reason,
+    unsubscribedAt: row.unsubscribed_at,
+    verifiedAt: row.verified_at,
+    verificationToken: row.verification_token,
+    verificationExpiresAt: row.verification_expires_at
+  };
+}
+
 import { toast } from 'react-hot-toast';
 import Papa from 'papaparse';
 import { sendInAppNotification } from '../services/notificationService';
@@ -103,15 +120,15 @@ export const SubscribersView: React.FC = () => {
   const [csvFile, setCsvFile] = useState<File | null>(null);
 
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'subscribers'), (snapshot) => {
-      const list: Subscriber[] = [];
+    const loadInitial = async () => {
+      const { data } = await supabase.from('subscribers').select('*').order('added_at', { ascending: false });
+      const mapped = (data || []).map(mapSubscriber);
+      setSubscribers(mapped);
+      // Derive unique tags from the loaded subscribers
       const tagsSet = new Set<string>();
       const seenLower = new Set<string>();
-      snapshot.forEach(doc => {
-        const data = doc.data() as Subscriber;
-        const parsedTags = parseTags(data.tags);
-        list.push({ ...data, tags: parsedTags, id: doc.id });
-        parsedTags.forEach(t => {
+      mapped.forEach(s => {
+        (s.tags || []).forEach(t => {
           const lower = t.toLowerCase();
           if (!seenLower.has(lower)) {
             seenLower.add(lower);
@@ -119,12 +136,19 @@ export const SubscribersView: React.FC = () => {
           }
         });
       });
-      list.sort((a,b) => new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime());
-      setSubscribers(list);
       setUniqueTags(Array.from(tagsSet));
       setLoading(false);
-    });
-    return () => unsub();
+    };
+    loadInitial();
+
+    const channel = supabase
+      .channel('subscribers-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'subscribers' }, () => {
+        loadInitial(); // simplest approach: just re-fetch everything on any change
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, []);
 
   const openAddModal = () => {
@@ -165,26 +189,24 @@ export const SubscribersView: React.FC = () => {
 
     try {
       if (editingSub) {
-        // Edit
-        await setDoc(doc(db, 'subscribers', editingSub.id), {
+        const { error } = await supabase.from('subscribers').update({
           name: subName,
           email: subEmail,
           status: subStatus,
-          tags,
-          addedAt: editingSub.addedAt,
-          addedBy: editingSub.addedBy
-        }, { merge: true });
+          tags
+        }).eq('id', editingSub.id);
+        if (error) throw error;
         toast.success("Subscriber updated successfully!");
       } else {
-        // New
-        await addDoc(collection(db, 'subscribers'), {
+        const { data: { user } } = await supabase.auth.getUser();
+        const { error } = await supabase.from('subscribers').insert({
           name: subName,
           email: subEmail,
           status: subStatus,
           tags,
-          addedAt: new Date().toISOString(),
-          addedBy: auth.currentUser?.email || 'admin'
+          added_by: user?.email || 'admin'
         });
+        if (error) throw error;
         await sendInAppNotification({
           title: "New Subscriber Added 👤",
           message: `${subName || 'Anonymous'} (${subEmail}) registered successfully.`,
@@ -201,7 +223,8 @@ export const SubscribersView: React.FC = () => {
   const toggleStatus = async (sub: Subscriber) => {
     const newStatus = sub.status === 'active' ? 'unsubscribed' : 'active';
     try {
-      await setDoc(doc(db, 'subscribers', sub.id), { status: newStatus }, { merge: true });
+      const { error } = await supabase.from('subscribers').update({ status: newStatus }).eq('id', sub.id);
+      if (error) throw error;
       await sendInAppNotification({
         title: "Subscriber Status Updated 🔄",
         message: `${sub.name || 'Anonymous'} is now set to ${newStatus}.`,
@@ -216,7 +239,8 @@ export const SubscribersView: React.FC = () => {
   const handleDelete = async (id: string) => {
     if (!window.confirm("Are you sure you want to delete this subscriber?")) return;
     try {
-      await deleteDoc(doc(db, 'subscribers', id));
+      const { error } = await supabase.from('subscribers').delete().eq('id', id);
+      if (error) throw error;
       toast.success("Deleted subscriber");
     } catch (e: any) {
       toast.error("Delete failed");
@@ -227,11 +251,8 @@ export const SubscribersView: React.FC = () => {
     if (!window.confirm(`Are you sure you want to permanently delete these ${selectedSubIds.length} custom subscribers?`)) return;
     const toastId = toast.loading(`Deleting ${selectedSubIds.length} subscribers...`);
     try {
-      const batch = writeBatch(db);
-      selectedSubIds.forEach(id => {
-        batch.delete(doc(db, 'subscribers', id));
-      });
-      await batch.commit();
+      const { error } = await supabase.from('subscribers').delete().in('id', selectedSubIds);
+      if (error) throw error;
       setSelectedSubIds([]);
       toast.success(`Successfully deleted selected subscribers!`, { id: toastId });
     } catch (err: any) {
@@ -242,11 +263,8 @@ export const SubscribersView: React.FC = () => {
   const handleBulkUpdateStatus = async (status: 'active' | 'unsubscribed' | 'bounced') => {
     const toastId = toast.loading(`Updating status...`);
     try {
-      const batch = writeBatch(db);
-      selectedSubIds.forEach(id => {
-        batch.set(doc(db, 'subscribers', id), { status }, { merge: true });
-      });
-      await batch.commit();
+      const { error } = await supabase.from('subscribers').update({ status }).in('id', selectedSubIds);
+      if (error) throw error;
       setSelectedSubIds([]);
       toast.success(`Successfully updated status for selected subscribers!`, { id: toastId });
     } catch (err: any) {
@@ -260,26 +278,23 @@ export const SubscribersView: React.FC = () => {
       toast.error("Please enter at least one tag.");
       return;
     }
-    
     const newTagsNormalized = Array.from(new Set(rawTags));
 
     const toastId = toast.loading(`Adding tags to ${selectedSubIds.length} subscribers...`);
     try {
-      const batch = writeBatch(db);
-      selectedSubIds.forEach(id => {
+      const updates = selectedSubIds.map(id => {
         const sub = subscribers.find(s => s.id === id);
-        if (sub) {
-          const currentTags = sub.tags || [];
-          const updatedTags = [...currentTags];
-          newTagsNormalized.forEach(newT => {
-            if (!updatedTags.some(existing => existing.toLowerCase() === newT.toLowerCase())) {
-              updatedTags.push(newT);
-            }
-          });
-          batch.set(doc(db, 'subscribers', id), { tags: updatedTags }, { merge: true });
-        }
+        if (!sub) return Promise.resolve();
+        const currentTags = sub.tags || [];
+        const updatedTags = [...currentTags];
+        newTagsNormalized.forEach(newT => {
+          if (!updatedTags.some(existing => existing.toLowerCase() === newT.toLowerCase())) {
+            updatedTags.push(newT);
+          }
+        });
+        return supabase.from('subscribers').update({ tags: updatedTags }).eq('id', id);
       });
-      await batch.commit();
+      await Promise.all(updates);
       setSelectedSubIds([]);
       setBulkTagInput('');
       setShowBulkTagModal(false);
@@ -298,16 +313,14 @@ export const SubscribersView: React.FC = () => {
 
     const toastId = toast.loading(`Removing tags from ${selectedSubIds.length} subscribers...`);
     try {
-      const batch = writeBatch(db);
-      selectedSubIds.forEach(id => {
+      const updates = selectedSubIds.map(id => {
         const sub = subscribers.find(s => s.id === id);
-        if (sub) {
-          const currentTags = sub.tags || [];
-          const updatedTags = currentTags.filter(t => !tagsToRemove.includes(t.toLowerCase()));
-          batch.set(doc(db, 'subscribers', id), { tags: updatedTags }, { merge: true });
-        }
+        if (!sub) return Promise.resolve();
+        const currentTags = sub.tags || [];
+        const updatedTags = currentTags.filter(t => !tagsToRemove.includes(t.toLowerCase()));
+        return supabase.from('subscribers').update({ tags: updatedTags }).eq('id', id);
       });
-      await batch.commit();
+      await Promise.all(updates);
       setSelectedSubIds([]);
       setBulkTagInput('');
       setShowBulkTagModal(false);
@@ -348,36 +361,31 @@ export const SubscribersView: React.FC = () => {
       header: true,
       skipEmptyLines: true,
       complete: async (results) => {
-        const batch = writeBatch(db);
-        let count = 0;
-        
+        const rows: any[] = [];
+
         results.data.forEach((row: any) => {
-          // Detect headers: name, email, tags, status
           const email = row.Email || row.email || row.EMAIL;
           const name = row.Name || row.name || row.NAME || email?.split('@')[0];
           const tagsStr = row.Tags || row.tags || row.TAGS || '';
-          const status = (row.Status || row.status || 'active').toLowerCase() as any;
+          const status = (row.Status || row.status || 'active').toLowerCase();
 
           if (email) {
             const tags = Array.from(new Set(tagsStr.split(';').map((t: string) => t.trim().toLowerCase()).filter(Boolean)));
-            const newDocRef = doc(collection(db, 'subscribers'));
-            batch.set(newDocRef, {
+            rows.push({
               email,
               name,
-              tagsSpace: tagsStr, // preserving raw
               tags,
               status: ['active', 'unsubscribed', 'bounced'].includes(status) ? status : 'active',
-              addedAt: new Date().toISOString(),
-              addedBy: auth.currentUser?.email || 'bulk-uploader'
+              added_by: 'bulk-uploader'
             });
-            count++;
           }
         });
 
-        if (count > 0) {
+        if (rows.length > 0) {
           try {
-            await batch.commit();
-            toast.success(`Broadly imported ${count} subscribers!`);
+            const { error } = await supabase.from('subscribers').insert(rows);
+            if (error) throw error;
+            toast.success(`Broadly imported ${rows.length} subscribers!`);
             setShowImportModal(false);
             setCsvFile(null);
           } catch (err: any) {
@@ -461,9 +469,10 @@ export const SubscribersView: React.FC = () => {
   const handleClearSingleFeedback = async (id: string, name: string) => {
     if (!window.confirm(`Are you sure you want to clear the feedback comments for ${name || 'this subscriber'}? This will set it back to "No reason specified".`)) return;
     try {
-      await setDoc(doc(db, 'subscribers', id), {
-        unsubscribeReason: "No reason specified"
-      }, { merge: true });
+      const { error } = await supabase.from('subscribers').update({
+        unsubscribe_reason: "No reason specified"
+      }).eq('id', id);
+      if (error) throw error;
       toast.success("Feedback reason cleared!");
     } catch (err: any) {
       toast.error(`Clear reason failed: ${err.message}`);
@@ -484,22 +493,22 @@ export const SubscribersView: React.FC = () => {
 
     const toastId = toast.loading("Processing bulk logs update...");
     try {
-      const batch = writeBatch(db);
-      filteredFeedback.forEach(s => {
-        if (actionType === 'delete') {
-          batch.delete(doc(db, 'subscribers', s.id));
-        } else {
-          batch.set(doc(db, 'subscribers', s.id), {
-            unsubscribeReason: "No reason specified"
-          }, { merge: true });
-        }
-      });
-      await batch.commit();
-      
+      const ids = filteredFeedback.map(s => s.id);
+
+      if (actionType === 'delete') {
+        const { error } = await supabase.from('subscribers').delete().in('id', ids);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('subscribers')
+          .update({ unsubscribe_reason: "No reason specified" })
+          .in('id', ids);
+        if (error) throw error;
+      }
+
       await sendInAppNotification({
         title: "Opt-Out Logs Cleared",
-        message: actionType === 'delete' 
-          ? `Bulk deleted ${filteredFeedback.length} unsubscribed contacts.` 
+        message: actionType === 'delete'
+          ? `Bulk deleted ${filteredFeedback.length} unsubscribed contacts.`
           : `Bulk reset reasons for ${filteredFeedback.length} unsubscribed contacts.`,
         type: "success"
       });

@@ -33,11 +33,11 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Toaster, toast } from 'react-hot-toast';
-import { doc, getDoc, updateDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
+import { supabase } from './supabase';
 
 import { ViewMode } from './types';
-import { auth, db } from './firebase';
 import { AuthProvider, useAuth } from './hooks/useAuth';
+
 
 // Modular Views
 import { DashboardView } from './components/DashboardView';
@@ -214,20 +214,28 @@ function AppContent() {
     setViewMode(view);
   };
 
-  // Listen to Quick Links settings changes from Firestore
+  // Listen to Quick Links settings changes from Supabase
   useEffect(() => {
     if (userId && profileStatus === 'active') {
-      const unsub = onSnapshot(doc(db, 'settings', 'quick_links'), (docSnap) => {
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          if (Array.isArray(data.links)) {
-            setQuickLinks(data.links);
-          }
+      // 1. One-time load
+      supabase.from('settings').select('value').eq('key', 'quick_links').maybeSingle().then(({ data }) => {
+        if (data && Array.isArray(data.value?.links)) {
+          setQuickLinks(data.value.links);
         }
-      }, (error) => {
-        console.warn("Failed to subscribe to quick links settings: ", error);
       });
-      return () => unsub();
+
+      // 2. Realtime subscription
+      const channel = supabase
+        .channel('quick-links-settings')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'settings', filter: 'key=eq.quick_links' }, async () => {
+          const { data } = await supabase.from('settings').select('value').eq('key', 'quick_links').maybeSingle();
+          if (data && Array.isArray(data.value?.links)) {
+            setQuickLinks(data.value.links);
+          }
+        })
+        .subscribe();
+
+      return () => { supabase.removeChannel(channel); };
     }
   }, [userId, profileStatus]);
 
@@ -243,13 +251,15 @@ function AppContent() {
       const urlParams = new URLSearchParams(window.location.search);
       const postId = urlParams.get('postId');
       if (postId) {
-        // Fetch post from Firestore
+        // Fetch post from Supabase
         const fetchPost = async () => {
           try {
-            const postRef = doc(db, 'posts', postId);
-            const postSnap = await getDoc(postRef);
-            if (postSnap.exists()) {
-              const postData = postSnap.data();
+            const { data: postData } = await supabase
+              .from('posts')
+              .select('*')
+              .eq('id', postId)
+              .maybeSingle();
+            if (postData) {
               const contentTitle = postData.contentTitle || postData.title || 'Untitled Campaign';
               const caption = postData.caption || postData.body || '';
               const creatives = postData.creatives || [];

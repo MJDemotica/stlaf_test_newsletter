@@ -5,6 +5,8 @@
 // Purpose: Serverless route dispatching or scheduling content publishing requested for Facebook and Instagram Graph API
 //
 
+import { createClient } from '@supabase/supabase-js';
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SECRET_KEY);
 import axios from 'axios';
 import FormData from 'form-data';
 

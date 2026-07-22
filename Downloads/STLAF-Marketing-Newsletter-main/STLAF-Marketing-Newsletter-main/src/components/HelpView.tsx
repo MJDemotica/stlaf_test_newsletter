@@ -27,9 +27,9 @@ import {
   Users
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { addDoc, collection, serverTimestamp, query, where, orderBy, onSnapshot, doc, updateDoc, arrayUnion, deleteDoc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { supabase } from '../supabase';
 import toast from 'react-hot-toast';
+
 
 const captionImg = '/img/CAPTION.png';
 const editPoImg = '/img/EditPo.png';
@@ -53,24 +53,31 @@ export const HelpView: React.FC<HelpViewProps> = ({ userEmail, displayName, user
   useEffect(() => {
     if (!userId) return;
 
-    const q = query(
-      collection(db, 'concerns'),
-      where('userId', '==', userId)
-    );
+    const loadInitial = async () => {
+      const { data } = await supabase
+        .from('concerns')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+      setMyConcerns((data || []).map(row => ({
+        id: row.id,
+        subject: row.subject,
+        messages: row.messages || [],
+        status: row.status,
+        userId: row.user_id,
+        userEmail: row.user_email,
+        userName: row.user_name,
+        timestamp: row.created_at  // ISO string
+      })));
+    };
+    loadInitial();
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const entries = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })).sort((a: any, b: any) => {
-        const timeA = a.timestamp?.toMillis?.() || 0;
-        const timeB = b.timestamp?.toMillis?.() || 0;
-        return timeB - timeA;
-      });
-      setMyConcerns(entries);
-    });
+    const channel = supabase
+      .channel(`concerns-user-${userId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'concerns', filter: `user_id=eq.${userId}` }, loadInitial)
+      .subscribe();
 
-    return () => unsubscribe();
+    return () => { supabase.removeChannel(channel); };
   }, [userId]);
 
   const handleSubmitConcern = async (e: React.FormEvent) => {
@@ -87,15 +94,16 @@ export const HelpView: React.FC<HelpViewProps> = ({ userEmail, displayName, user
         timestamp: new Date().toISOString()
       };
 
-      await addDoc(collection(db, 'concerns'), {
-        userId: userId,
-        userEmail: userEmail,
-        userName: displayName || userEmail,
+      const { error } = await supabase.from('concerns').insert({
+        user_id: userId,
+        user_email: userEmail,
+        user_name: displayName || userEmail,
         subject: subject.trim() || 'No Subject',
         messages: [initialMessage],
-        status: 'pending',
-        timestamp: serverTimestamp(),
+        status: 'pending'
       });
+      if (error) throw error;
+
       toast.success("Concern submitted. A supervisor will review it shortly.");
       setConcern('');
       setSubject('');
@@ -122,11 +130,18 @@ export const HelpView: React.FC<HelpViewProps> = ({ userEmail, displayName, user
         timestamp: new Date().toISOString()
       };
 
-      await updateDoc(doc(db, 'concerns', concernId), {
-        messages: arrayUnion(newMessage),
-        status: 'pending' // Reset to pending when user replies
-      });
-      
+      const { data: current, error: fetchError } = await supabase
+        .from('concerns').select('messages').eq('id', concernId).maybeSingle();
+      if (fetchError) throw fetchError;
+
+      const updatedMessages = [...(current?.messages || []), newMessage];
+
+      const { error } = await supabase.from('concerns').update({
+        messages: updatedMessages,
+        status: 'pending'
+      }).eq('id', concernId);
+      if (error) throw error;
+
       setUserReplyText(prev => ({ ...prev, [concernId]: '' }));
       toast.success("Reply sent.");
     } catch (error) {
@@ -603,7 +618,8 @@ export const HelpView: React.FC<HelpViewProps> = ({ userEmail, displayName, user
                                     <button 
                                       onClick={async () => {
                                         try {
-                                          await updateDoc(doc(db, 'concerns', item.id), { status: 'resolved' });
+                                          const { error } = await supabase.from('concerns').update({ status: 'resolved' }).eq('id', item.id);
+                                          if (error) throw error;
                                           toast.success("Marked as resolved.");
                                         } catch (err) {
                                           toast.error("Failed to update status.");
@@ -617,7 +633,7 @@ export const HelpView: React.FC<HelpViewProps> = ({ userEmail, displayName, user
                                   )}
                                 </div>
                                 <span className="text-xs text-slate-400 font-bold italic">
-                                  {item.timestamp?.toDate ? new Date(item.timestamp.toDate()).toLocaleString() : 'Just now'}
+                                  {item.timestamp ? new Date(item.timestamp).toLocaleString() : 'Just now'}
                                 </span>
                               </div>
                               <h4 className="text-lg font-black text-slate-900 dark:text-white mb-6 border-b border-slate-50 dark:border-slate-800 pb-2">{item.subject}</h4>
@@ -697,7 +713,7 @@ export const HelpView: React.FC<HelpViewProps> = ({ userEmail, displayName, user
                               <div className="flex-1">
                                 <div className="flex items-center justify-between mb-2">
                                    <h4 className="text-sm font-bold text-slate-600 dark:text-slate-300">{item.subject}</h4>
-                                   <span className="text-[10px] text-slate-400 font-bold">{item.timestamp?.toDate ? new Date(item.timestamp.toDate()).toLocaleDateString() : ''}</span>
+                                   <span className="text-[10px] text-slate-400 font-bold">{item.timestamp ? new Date(item.timestamp).toLocaleDateString() : ''}</span>
                                 </div>
                                 <p className="text-xs text-slate-400 line-clamp-1 italic">
                                   "{item.messages && item.messages.length > 0 ? item.messages[0].text : (item.message || 'No content')}"
@@ -707,15 +723,16 @@ export const HelpView: React.FC<HelpViewProps> = ({ userEmail, displayName, user
                               {isDeleting === item.id ? (
                                 <div className="flex items-center gap-2">
                                    <button 
-                                     onClick={async () => {
-                                       try {
-                                         await deleteDoc(doc(db, 'concerns', item.id));
-                                         toast.success("Record deleted.");
-                                         setIsDeleting(null);
-                                       } catch (err) {
-                                         toast.error("Failed to delete.");
-                                       }
-                                     }}
+                                      onClick={async () => {
+                                        try {
+                                          const { error } = await supabase.from('concerns').delete().eq('id', item.id);
+                                          if (error) throw error;
+                                          toast.success("Record deleted.");
+                                          setIsDeleting(null);
+                                        } catch (err) {
+                                          toast.error("Failed to delete.");
+                                        }
+                                      }}
                                      className="px-2 py-1 bg-rose-600 text-white rounded-lg text-[10px] font-black"
                                    >
                                      OK

@@ -25,9 +25,44 @@ import {
   HelpCircle,
 } from 'lucide-react';
 import { motion } from 'motion/react';
-import { collection, onSnapshot, query, limit, orderBy } from 'firebase/firestore';
-import { db } from '../firebase';
+import { supabase } from '../supabase';
 import { EmailCampaign, Subscriber } from '../types';
+
+function mapCampaign(row: any): EmailCampaign {
+  return {
+    id: row.id,
+    title: row.title,
+    subject: row.subject,
+    body: row.body,
+    status: row.status,
+    type: row.type,
+    recipientTags: row.recipient_tags || [],
+    scheduledAt: row.scheduled_at,
+    sentAt: row.sent_at,
+    sentCount: row.sent_count || 0,
+    failedCount: row.failed_count || 0,
+    createdBy: row.created_by,
+    createdAt: row.created_at,
+    attachmentsJson: row.attachments_json,
+    importedPostId: row.imported_post_id
+  };
+}
+
+function mapSubscriber(row: any): Subscriber {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    status: row.status,
+    tags: row.tags || [],
+    addedAt: row.added_at,
+    addedBy: row.added_by,
+    unsubscribeReason: row.unsubscribe_reason,
+    unsubscribedAt: row.unsubscribed_at,
+    verifiedAt: row.verified_at
+  };
+}
+
 import axios from 'axios';
 import {
   ResponsiveContainer,
@@ -95,47 +130,52 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, userRo
       })
       .catch(err => console.error("Could not fetch Gmail status", err));
 
-    // Listen to campaigns
-    const qCampaigns = query(collection(db, 'emailCampaigns'), orderBy('createdAt', 'desc'));
-    const unsubscribeCampaigns = onSnapshot(qCampaigns, (snapshot) => {
-      const list: EmailCampaign[] = [];
+    const loadCampaigns = async () => {
+      const { data } = await supabase
+        .from('email_campaigns')
+        .select('*')
+        .order('created_at', { ascending: false });
+      const list = (data || []).map(mapCampaign);
       let monthSentCount = 0;
       const now = new Date();
       const currentMonth = now.getMonth();
       const currentYear = now.getFullYear();
-
-      snapshot.forEach((doc) => {
-        const data = doc.data() as EmailCampaign;
-        list.push({ ...data, id: doc.id });
-
-        if (data.status === 'sent' && data.sentAt) {
+      list.forEach(c => {
+        if (c.status === 'sent' && c.sentAt) {
           try {
-            const sentDate = new Date(data.sentAt);
+            const sentDate = new Date(c.sentAt);
             if (sentDate.getMonth() === currentMonth && sentDate.getFullYear() === currentYear) {
-              monthSentCount += (data.sentCount || 0);
+              monthSentCount += (c.sentCount || 0);
             }
-          } catch (e) {
-            // Ignore
-          }
+          } catch (e) { /* ignore */ }
         }
       });
       setCampaigns(list);
       setSentThisMonth(monthSentCount);
       setLoading(false);
-    });
+    };
 
-    // Listen to subscribers
-    const unsubscribeSubscribers = onSnapshot(collection(db, 'subscribers'), (snapshot) => {
-      const list: Subscriber[] = [];
-      snapshot.forEach((doc) => {
-        list.push({ ...(doc.data() as Subscriber), id: doc.id });
-      });
-      setSubscribers(list);
-    });
+    const loadSubscribers = async () => {
+      const { data } = await supabase.from('subscribers').select('*');
+      setSubscribers((data || []).map(mapSubscriber));
+    };
+
+    loadCampaigns();
+    loadSubscribers();
+
+    const campaignsChannel = supabase
+      .channel('dashboard-campaigns')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'email_campaigns' }, loadCampaigns)
+      .subscribe();
+
+    const subscribersChannel = supabase
+      .channel('dashboard-subscribers')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'subscribers' }, loadSubscribers)
+      .subscribe();
 
     return () => {
-      unsubscribeCampaigns();
-      unsubscribeSubscribers();
+      supabase.removeChannel(campaignsChannel);
+      supabase.removeChannel(subscribersChannel);
     };
   }, []);
 

@@ -22,7 +22,7 @@ export default function AuthScreen() {
     try {
       await login();
     } catch (err: any) {
-      if (err.code === 'auth/popup-blocked') {
+      if (err.message?.includes('popup')) {
         setError('Login popup blocked by browser. Please enable popups and try again.');
       } else if (err.code === 'auth/cancelled-popup-request') {
         // Benign

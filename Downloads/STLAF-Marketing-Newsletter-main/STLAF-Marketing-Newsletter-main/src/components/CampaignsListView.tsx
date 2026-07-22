@@ -27,12 +27,32 @@ import {
   CheckSquare,
   Download
 } from 'lucide-react';
-import { collection, onSnapshot, deleteDoc, doc, addDoc, updateDoc } from 'firebase/firestore';
+import { supabase } from '../supabase';
 import { motion, AnimatePresence } from 'motion/react';
-import { db, auth } from '../firebase';
 import { EmailCampaign } from '../types';
 import { toast } from 'react-hot-toast';
 import axios from 'axios';
+
+function mapCampaign(row: any): EmailCampaign {
+  return {
+    id: row.id,
+    title: row.title,
+    subject: row.subject,
+    body: row.body,
+    status: row.status,
+    type: row.type,
+    recipientTags: row.recipient_tags || [],
+    scheduledAt: row.scheduled_at,
+    sentAt: row.sent_at,
+    sentCount: row.sent_count || 0,
+    failedCount: row.failed_count || 0,
+    createdBy: row.created_by,
+    createdAt: row.created_at,
+    attachmentsJson: row.attachments_json,
+    importedPostId: row.imported_post_id
+  };
+}
+
 
 interface CampaignsListViewProps {
   onNavigate: (view: any, data?: any) => void;
@@ -125,26 +145,30 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
   };
 
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'emailCampaigns'), (snapshot) => {
-      const list: EmailCampaign[] = [];
-      snapshot.forEach((doc) => {
-        list.push({ ...(doc.data() as EmailCampaign), id: doc.id });
-      });
-      // Sort by createdAt desc
-      list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      setCampaigns(list);
+    const loadInitial = async () => {
+      const { data, error } = await supabase
+        .from('email_campaigns')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (error) { console.error('Error fetching campaigns:', error); return; }
+      setCampaigns((data || []).map(mapCampaign));
       setLoading(false);
-    }, (err) => {
-      console.error("Error fetching campaigns:", err);
-    });
+    };
+    loadInitial();
 
-    return () => unsub();
+    const channel = supabase
+      .channel('campaigns-list-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'email_campaigns' }, loadInitial)
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, []);
 
   const handleDelete = async (campaignId: string) => {
     if (!window.confirm("Are you sure you want to delete this campaign permanently?")) return;
     try {
-      await deleteDoc(doc(db, 'emailCampaigns', campaignId));
+      const { error } = await supabase.from('email_campaigns').delete().eq('id', campaignId);
+      if (error) throw error;
       setSelectedCampaignIds(prev => prev.filter(id => id !== campaignId));
       toast.success("Campaign deleted");
     } catch (e: any) {
@@ -154,19 +178,19 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
 
   const handleDuplicate = async (campaign: EmailCampaign) => {
     try {
-      const duplicated: Omit<EmailCampaign, 'id'> = {
+      const { data: { user } } = await supabase.auth.getUser();
+      const { error } = await supabase.from('email_campaigns').insert({
         title: `${campaign.title} (Copy)`,
         subject: campaign.subject,
         body: campaign.body,
         status: 'draft',
         type: campaign.type,
-        recipientTags: Array.isArray(campaign.recipientTags) ? campaign.recipientTags : [],
-        sentCount: 0,
-        failedCount: 0,
-        createdBy: auth.currentUser?.email || 'System',
-        createdAt: new Date().toISOString()
-      };
-      await addDoc(collection(db, 'emailCampaigns'), duplicated);
+        recipient_tags: Array.isArray(campaign.recipientTags) ? campaign.recipientTags : [],
+        sent_count: 0,
+        failed_count: 0,
+        created_by: user?.email || 'System'
+      });
+      if (error) throw error;
       toast.success("Campaign duplicated into draft!");
     } catch (e: any) {
       toast.error("Duplicate failed");
@@ -179,7 +203,8 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
 
     const loadingToast = toast.loading(`Deleting ${selectedCampaignIds.length} campaigns...`);
     try {
-      await Promise.all(selectedCampaignIds.map(id => deleteDoc(doc(db, 'emailCampaigns', id))));
+      const { error } = await supabase.from('email_campaigns').delete().in('id', selectedCampaignIds);
+      if (error) throw error;
       setSelectedCampaignIds([]);
       toast.success("Selected campaigns deleted successfully", { id: loadingToast });
     } catch (e: any) {
@@ -193,24 +218,23 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
 
     const loadingToast = toast.loading(`Duplicating ${selectedCampaignIds.length} campaigns...`);
     try {
+      const { data: { user } } = await supabase.auth.getUser();
       const selectedList = campaigns.filter(c => selectedCampaignIds.includes(c.id));
-      await Promise.all(selectedList.map(campaign => {
-        const duplicated: Omit<EmailCampaign, 'id'> = {
-          title: `${campaign.title} (Copy)`,
-          subject: campaign.subject,
-          body: campaign.body,
-          status: 'draft',
-          type: campaign.type,
-          recipientTags: Array.isArray(campaign.recipientTags) ? campaign.recipientTags : [],
-          sentCount: 0,
-          failedCount: 0,
-          createdBy: auth.currentUser?.email || 'System',
-          createdAt: new Date().toISOString()
-        };
-        return addDoc(collection(db, 'emailCampaigns'), duplicated);
+      const rows = selectedList.map(campaign => ({
+        title: `${campaign.title} (Copy)`,
+        subject: campaign.subject,
+        body: campaign.body,
+        status: 'draft',
+        type: campaign.type,
+        recipient_tags: Array.isArray(campaign.recipientTags) ? campaign.recipientTags : [],
+        sent_count: 0,
+        failed_count: 0,
+        created_by: user?.email || 'System'
       }));
+      const { error } = await supabase.from('email_campaigns').insert(rows);
+      if (error) throw error;
       setSelectedCampaignIds([]);
-      toast.success(`Successfully duplicated ${selectedList.length} campaigns!`, { id: loadingToast });
+      toast.success(`Successfully duplicated ${rows.length} campaigns!`, { id: loadingToast });
     } catch (e: any) {
       toast.error(`Bulk duplicate failed: ${e.message}`, { id: loadingToast });
     }
@@ -220,13 +244,11 @@ export const CampaignsListView: React.FC<CampaignsListViewProps> = ({ onNavigate
     if (selectedCampaignIds.length === 0) return;
     const loadingToast = toast.loading(`Updating ${selectedCampaignIds.length} campaigns to ${newStatus}...`);
     try {
-      await Promise.all(selectedCampaignIds.map(id => {
-        const payload: any = { status: newStatus };
-        if (newStatus === 'sent') {
-          payload.sentAt = new Date().toISOString();
-        }
-        return updateDoc(doc(db, 'emailCampaigns', id), payload);
-      }));
+      const payload: any = { status: newStatus };
+      if (newStatus === 'sent') payload.sent_at = new Date().toISOString();
+
+      const { error } = await supabase.from('email_campaigns').update(payload).in('id', selectedCampaignIds);
+      if (error) throw error;
       setSelectedCampaignIds([]);
       toast.success(`Updated status to ${newStatus}!`, { id: loadingToast });
     } catch (e: any) {

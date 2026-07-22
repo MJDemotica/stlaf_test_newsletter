@@ -1,232 +1,140 @@
 //
 // File: useAuth.tsx
-// Author: Juan Dela Cruz
-// Date: 2026-06-09
-// Purpose: Authentication context provider hook utilizing Firebase Auth, managing session logic, profiles, and role mapping
+// Purpose: Authentication context provider using Supabase Auth + profiles table
 //
 
 import React, { useState, useEffect, createContext, useContext } from 'react';
-import { auth, db } from '../firebase';
-import {
-  onAuthStateChanged,
-  GoogleAuthProvider,
-  signInWithPopup,
-  signOut,
-  User,
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword
-} from 'firebase/auth';
-import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { supabase } from '../supabase';
+import type { User } from '@supabase/supabase-js';
 import { UserProfile, UserRole } from '../types';
 
 interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
   loading: boolean;
-  googleAccessToken: string | null;
   login: () => Promise<void>;
-  loginWithEmail: (email: string, pass: string) => Promise<void>;
-  signupWithEmail: (email: string, pass: string) => Promise<void>;
   logout: () => Promise<void>;
   updateProfile: (data: Partial<UserProfile>) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const SUPERVISOR_EMAILS = ['cbalvarado@sadsadtamesislaw.com', 'markjosephdemotica@gmail.com']; // emergency admin access
+const SUPERVISOR_EMAILS = ['cbalvarado@sadsadtamesislaw.com', 'markjosephdemotica@gmail.com'];
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [isAuthenticating, setIsAuthenticating] = useState(false);
-  const getStoredToken = () => {
-    const token = sessionStorage.getItem('google_drive_token');
-    const expiry = sessionStorage.getItem('google_drive_token_expiry');
-    if (token && expiry && Date.now() < parseInt(expiry)) {
-      return token;
-    }
-    // Token expired or missing, clear it
-    if (token) {
-      sessionStorage.removeItem('google_drive_token');
-      sessionStorage.removeItem('google_drive_token_expiry');
-    }
-    return null;
-  };
-  const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(getStoredToken());
 
-  useEffect(() => {
-    // If firebase config is completely generic dummy, auth might not work properly. 
-    // We catch it if not.
-    if (!auth) {
-      setLoading(false);
+  const loadOrCreateProfile = async (authUser: User) => {
+    // 1. Look for a pre-registered role assignment (like the old roleAssignments collection)
+    const { data: assignment } = await supabase
+      .from('role_assignments')
+      .select('*')
+      .eq('email', authUser.email?.toLowerCase())
+      .maybeSingle();
+
+    // 2. Look for an existing profile row
+    const { data: existingProfile } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', authUser.id)
+      .maybeSingle();
+
+    if (existingProfile) {
+      const updates: Partial<UserProfile> = {};
+      if (assignment && existingProfile.role !== assignment.role) updates.role = assignment.role;
+      if (assignment && existingProfile.department !== assignment.department) updates.department = assignment.department;
+      if (authUser.user_metadata?.avatar_url && existingProfile.photo_url !== authUser.user_metadata.avatar_url) {
+        updates.photo_url = authUser.user_metadata.avatar_url;
+      }
+      if (Object.keys(updates).length > 0) {
+        const { data: updated } = await supabase
+          .from('profiles').update(updates).eq('id', authUser.id).select().maybeSingle();
+        setProfile(mapProfile(updated || { ...existingProfile, ...updates }));
+      } else {
+        setProfile(mapProfile(existingProfile));
+      }
       return;
     }
 
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setUser(user);
-      if (user) {
-        const docRef = doc(db, 'users', user.uid);
-        try {
-          // Check for dynamic role assignment first
-          let assignedRole: UserRole | null = null;
-          let assignedDept: string | null = null;
+    // 3. First-ever login: create a new profile row
+    const isSupervisor = SUPERVISOR_EMAILS.includes(authUser.email || '');
+    const role: UserRole = assignment?.role || (isSupervisor ? 'marketing_supervisor' : 'department');
+    const department = assignment?.department || 'Operations';
+    const status = (assignment || isSupervisor) ? 'active' : 'pending';
 
-          if (user.email) {
-            const assignmentQuery = query(
-              collection(db, 'roleAssignments'),
-              where('email', '==', user.email.toLowerCase())
-            );
-            const assignmentSnap = await getDocs(assignmentQuery);
-            if (!assignmentSnap.empty) {
-              const assignmentData = assignmentSnap.docs[0].data();
-              assignedRole = assignmentData.role;
-              assignedDept = assignmentData.department;
-            }
-          }
+    const { data: created } = await supabase.from('profiles').insert({
+      id: authUser.id,
+      email: authUser.email,
+      display_name: authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || 'User',
+      role,
+      department,
+      photo_url: authUser.user_metadata?.avatar_url,
+      status
+    }).select().maybeSingle();
 
-          const docSnap = await getDoc(docRef);
+    setProfile(mapProfile(created));
+  };
 
-          if (docSnap.exists()) {
-            const data = docSnap.data() as UserProfile;
-            let updated = false;
-            let updatedData = { ...data };
+  const mapProfile = (row: any): UserProfile | null => {
+    if (!row) return null;
+    return {
+      uid: row.id,
+      email: row.email,
+      displayName: row.display_name,
+      role: row.role,
+      department: row.department,
+      photoURL: row.photo_url,
+      status: row.status
+    };
+  };
 
-            // Apply assigned role if exists
-            if (assignedRole && data.role !== assignedRole) {
-              updatedData.role = assignedRole;
-              updated = true;
-            }
-
-            // Sync dept if assigned
-            if (assignedDept && data.department !== assignedDept) {
-              updatedData.department = assignedDept as any;
-              updated = true;
-            }
-
-            // Force supervisor role for emergency emails if not already assigned a role
-            if (!assignedRole && SUPERVISOR_EMAILS.includes(user.email || '') && data.role !== 'marketing_supervisor') {
-              updatedData.role = 'marketing_supervisor';
-              updatedData.status = 'active';
-              updated = true;
-            }
-
-            // Ensure status exists for older users
-            if (!data.status) {
-              updatedData.status = 'active';
-              updated = true;
-            }
-
-            // Sync photo URL
-            if (user.photoURL && data.photoURL !== user.photoURL) {
-              updatedData.photoURL = user.photoURL;
-              updated = true;
-            }
-
-            if (updated) {
-              await setDoc(docRef, updatedData);
-              setProfile(updatedData);
-            } else {
-              setProfile(data);
-            }
-          } else {
-            // Auto-create profile for new users
-            const isSupervisor = SUPERVISOR_EMAILS.includes(user.email || '');
-
-            let role: UserRole = assignedRole || (isSupervisor ? 'marketing_supervisor' : 'department');
-            let department = assignedDept || 'Operations';
-            // Default status: active if pre-registered or supervisor, otherwise pending
-            let status: any = (assignedRole || isSupervisor) ? 'active' : 'pending';
-
-            const newProfile: UserProfile = {
-              uid: user.uid,
-              email: user.email || '',
-              displayName: user.displayName || user.email?.split('@')[0] || 'User',
-              role,
-              department: department as any,
-              photoURL: user.photoURL || undefined,
-              status
-            };
-
-            await setDoc(docRef, newProfile);
-            setProfile(newProfile);
-          }
-        } catch (error) {
-          console.error('Error fetching/creating profile:', error);
-        }
-      } else {
-        setProfile(null);
-      }
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      if (session?.user) loadOrCreateProfile(session.user);
       setLoading(false);
     });
 
-    return unsubscribe;
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        loadOrCreateProfile(session.user);
+      } else {
+        setProfile(null);
+      }
+    });
+
+    return () => listener.subscription.unsubscribe();
   }, []);
 
   const login = async () => {
-    if (isAuthenticating) return;
-    setIsAuthenticating(true);
-    try {
-      const provider = new GoogleAuthProvider();
-      provider.addScope('https://www.googleapis.com/auth/drive');
-      const result = await signInWithPopup(auth, provider);
-      const credential = GoogleAuthProvider.credentialFromResult(result);
-      const token = credential?.accessToken;
-      if (token) {
-        setGoogleAccessToken(token);
-        sessionStorage.setItem('google_drive_token', token);
-        sessionStorage.setItem('google_drive_token_expiry', (Date.now() + 3600 * 1000).toString()); // 1 hour
-      }
-    } finally {
-      setIsAuthenticating(false);
-    }
-  };
-
-  const loginWithEmail = async (email: string, pass: string) => {
-    if (isAuthenticating) return;
-    setIsAuthenticating(true);
-    try {
-      await signInWithEmailAndPassword(auth, email, pass);
-    } finally {
-      setIsAuthenticating(false);
-    }
-  };
-
-  const signupWithEmail = async (email: string, pass: string) => {
-    if (isAuthenticating) return;
-    setIsAuthenticating(true);
-    try {
-      await createUserWithEmailAndPassword(auth, email, pass);
-    } finally {
-      setIsAuthenticating(false);
-    }
+    await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: window.location.origin }
+    });
   };
 
   const logout = async () => {
-    await signOut(auth);
-    setGoogleAccessToken(null);
-    sessionStorage.removeItem('google_drive_token');
+    await supabase.auth.signOut();
   };
 
   const updateProfile = async (data: Partial<UserProfile>) => {
     if (!user) return;
-    const docRef = doc(db, 'users', user.uid);
-    const newProfile = {
-      uid: user.uid,
-      email: user.email || '',
-      displayName: user.displayName || '',
-      photoURL: user.photoURL || undefined,
-      role: profile?.role || 'department',
-      department: 'Operations',
-      ...profile,
-      ...data,
-    } as UserProfile;
-    await setDoc(docRef, newProfile);
-    setProfile(newProfile);
+    const dbUpdates: any = {};
+    if (data.displayName !== undefined) dbUpdates.display_name = data.displayName;
+    if (data.photoURL !== undefined) dbUpdates.photo_url = data.photoURL;
+    if (data.role !== undefined) dbUpdates.role = data.role;
+    if (data.department !== undefined) dbUpdates.department = data.department;
+
+    const { data: updated } = await supabase
+      .from('profiles').update(dbUpdates).eq('id', user.id).select().maybeSingle();
+    setProfile(mapProfile(updated));
   };
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, googleAccessToken, login, loginWithEmail, signupWithEmail, logout, updateProfile }}>
+    <AuthContext.Provider value={{ user, profile, loading, login, logout, updateProfile }}>
       {children}
     </AuthContext.Provider>
   );

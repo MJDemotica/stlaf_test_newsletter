@@ -2,93 +2,12 @@
 // File: public-verify.js
 // Author: Juan Dela Cruz
 // Date: 2026-06-09
-// Purpose: Serverless endpoint verifying email tokens from confirmation links and activating subscription records in Firestore
+// Purpose: Serverless endpoint verifying email tokens from confirmation links and activating subscription records in Supabase
 //
 
-import axios from "axios";
-
-// Intercept responses to handle 429 and rate/quota limits automatically via exponential backoff retry
-axios.interceptors.response.use(
-  (response) => {
-    return response;
-  },
-  async (error) => {
-    const config = error.config;
-    const status = error.response?.status;
-    const errorMsg = error.response?.data?.error?.message || error.message || "";
-    
-    const isRateLimit = status === 429 || errorMsg.includes("Quota exceeded") || errorMsg.includes("RESOURCE_EXHAUSTED");
-    
-    if (isRateLimit && config) {
-      config._retryCount = config._retryCount || 0;
-      const maxRetries = 3;
-      if (config._retryCount < maxRetries) {
-        config._retryCount += 1;
-        const delay = Math.pow(2, config._retryCount) * 1000 + Math.floor(Math.random() * 500);
-        console.warn(`[AXIOS ERROR 429/QUOTA] Rate limit or quota exceeded for ${config.url}. Retrying in ${delay}ms... (Attempt ${config._retryCount} of ${maxRetries})`);
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        return axios(config);
-      }
-    }
-    return Promise.reject(error);
-  }
-);
-
-// ── FIRESTORE REST HELPERS ───────────────────────────────────────────────────
-
-function getFirestoreUrl() {
-  const projectId = process.env.VITE_FIREBASE_PROJECT_ID;
-  const databaseId = process.env.VITE_FIREBASE_DATABASE_ID || "(default)";
-  return `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${databaseId}/documents`;
-}
-
-function getApiKeyParam() {
-  const apiKey = process.env.VITE_FIREBASE_API_KEY;
-  return apiKey ? `?key=${apiKey}` : "";
-}
-
-function getFirestoreRestUrl(collectionPath, extraParams = "") {
-  const baseUrl = getFirestoreUrl();
-  let url = `${baseUrl}/${collectionPath}${getApiKeyParam()}`;
-  if (extraParams) {
-    url += url.includes("?") ? `&${extraParams}` : `?${extraParams}`;
-  }
-  return url;
-}
-
-function toFirestoreJSON(obj) {
-  const fields = {};
-  for (const [key, val] of Object.entries(obj)) {
-    if (typeof val === 'boolean') fields[key] = { booleanValue: val };
-    else if (typeof val === 'number') fields[key] = { doubleValue: val };
-    else if (Array.isArray(val)) {
-      fields[key] = {
-        arrayValue: {
-          values: val.map(item => {
-            if (typeof item === 'boolean') return { booleanValue: item };
-            if (typeof item === 'number') return { doubleValue: item };
-            return { stringValue: String(item) };
-          })
-        }
-      };
-    } else fields[key] = { stringValue: String(val || '') };
-  }
-  return { fields };
-}
-
-function fromFirestoreJSON(doc) {
-  if (!doc || !doc.fields) return null;
-  const obj = {};
-  for (const [key, vo] of Object.entries(doc.fields)) {
-    if (vo.booleanValue !== undefined) obj[key] = vo.booleanValue;
-    else if (vo.doubleValue !== undefined) obj[key] = Number(vo.doubleValue);
-    else if (vo.integerValue !== undefined) obj[key] = Number(vo.integerValue);
-    else if (vo.stringValue !== undefined) obj[key] = vo.stringValue;
-    else if (vo.arrayValue) obj[key] = vo.arrayValue.values ? vo.arrayValue.values.map(v => v.booleanValue ?? v.doubleValue ?? v.integerValue ?? v.stringValue ?? '') : [];
-    else obj[key] = JSON.stringify(vo);
-  }
-  return obj;
-}
+import { createClient } from '@supabase/supabase-js';
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SECRET_KEY);
+import axios from 'axios';
 
 // ── HANDLER ──────────────────────────────────────────────────────────────────
 
@@ -98,8 +17,8 @@ export default async function handler(req, res) {
   const protocol = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
   const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
   let hostUrl = `${protocol}://${host}`;
-  if (hostUrl.includes("run.app") && !hostUrl.startsWith("https://")) {
-    hostUrl = hostUrl.replace("http://", "https://");
+  if (hostUrl.includes('run.app') && !hostUrl.startsWith('https://')) {
+    hostUrl = hostUrl.replace('http://', 'https://');
   }
 
   if (!token || !email) {
@@ -107,72 +26,63 @@ export default async function handler(req, res) {
   }
 
   try {
-    // 1. Fetch matching subscriber
-    const subUrl = getFirestoreRestUrl("subscribers", "pageSize=300");
-    const subResp = await axios.get(subUrl);
-    const allDocs = subResp.data?.documents || [];
-    const subscribers = allDocs.map((d) => {
-      const sId = d.name.split("/").pop();
-      return { id: sId, ...fromFirestoreJSON(d) };
-    });
+    // 1. Find subscriber by email (case-insensitive)
+    const { data: existing } = await supabase
+      .from('subscribers')
+      .select('*')
+      .ilike('email', email)
+      .maybeSingle();
 
-    const existing = subscribers.find((s) => s.email && s.email.toLowerCase() === email.toLowerCase());
     if (!existing) {
       return res.redirect(`${hostUrl}/subscribe?verified=invalid`);
     }
 
-    // Check status
+    // 2. Already active — treat as success
     if (existing.status === 'active') {
       return res.redirect(`${hostUrl}/subscribe?verified=success&email=${encodeURIComponent(existing.email)}`);
     }
 
-    // Check token matches
-    if (existing.verificationToken !== token) {
+    // 3. Check token matches (snake_case column)
+    if (existing.verification_token !== token) {
       return res.redirect(`${hostUrl}/subscribe?verified=invalid`);
     }
 
-    // Check expiration
-    if (existing.verificationExpiresAt) {
-      const expiresAt = new Date(existing.verificationExpiresAt);
+    // 4. Check expiration (snake_case column)
+    if (existing.verification_expires_at) {
+      const expiresAt = new Date(existing.verification_expires_at);
       if (isNaN(expiresAt.getTime()) || expiresAt < new Date()) {
-        const deleteUrl = getFirestoreRestUrl(`subscribers/${existing.id}`);
-        await axios.delete(deleteUrl);
+        // Token expired — delete the pending record
+        await supabase.from('subscribers').delete().eq('id', existing.id);
         return res.redirect(`${hostUrl}/subscribe?verified=expired`);
       }
     }
 
-    // Activate subscriber
-    const updated = {
-      ...existing,
-      status: "active",
-      verifiedAt: new Date().toISOString()
-    };
-    delete updated.verificationToken;
-    delete updated.verificationExpiresAt;
-
-    const patchUrl = getFirestoreRestUrl(`subscribers/${existing.id}`);
-    await axios.patch(patchUrl, toFirestoreJSON(updated));
+    // 5. Activate subscriber, clear verification fields
+    await supabase.from('subscribers').update({
+      status: 'active',
+      verified_at: new Date().toISOString(),
+      verification_token: null,
+      verification_expires_at: null
+    }).eq('id', existing.id);
 
     console.log(`[PUBLIC SUBSCRIPTION] Verified subscriber: ${email}`);
 
-    // Create real-time dashboard notification
+    // 6. Create real-time dashboard notification in Supabase
     try {
-      const newNotify = {
-        title: "Subscriber Verified ✅",
+      await supabase.from('notifications').insert({
+        title: 'Subscriber Verified ✅',
         message: `${email} verified their email and is now an active subscriber!`,
-        type: "success",
+        type: 'success',
         read: false,
-        createdAt: new Date().toISOString()
-      };
-      const notifyUrl = getFirestoreRestUrl("notifications");
-      await axios.post(notifyUrl, toFirestoreJSON(newNotify));
+        created_at: new Date().toISOString()
+      });
     } catch (notifyErr) {
-      console.warn("Could not post system notification:", notifyErr.message);
+      console.warn('Could not post system notification:', notifyErr.message);
     }
 
     return res.redirect(`${hostUrl}/subscribe?verified=success&email=${encodeURIComponent(existing.email)}`);
   } catch (err) {
-    console.error("[PUBLIC VERIFICATION ERR]", err.message);
+    console.error('[PUBLIC VERIFICATION ERR]', err.message);
     return res.redirect(`${hostUrl}/subscribe?verified=invalid`);
   }
 }

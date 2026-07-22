@@ -12,8 +12,14 @@ import axios from "axios";
 import dotenv from "dotenv";
 import cors from "cors";
 import fs from "fs";
+import { createClient } from "@supabase/supabase-js";
 
 dotenv.config();
+
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SECRET_KEY!
+);
 
 async function startServer() {
   const app = express();
@@ -52,209 +58,7 @@ async function startServer() {
     next();
   });
 
-  // Firestore REST JSON Helpers (for secure server-side interactions)
-  function toFirestoreJSON(obj: any) {
-    const fields: any = {};
-    for (const [key, val] of Object.entries(obj)) {
-      if (typeof val === 'boolean') {
-        fields[key] = { booleanValue: val };
-      } else if (typeof val === 'number') {
-        fields[key] = { doubleValue: val };
-      } else if (Array.isArray(val)) {
-        fields[key] = {
-          arrayValue: {
-            values: val.map(item => {
-              if (typeof item === 'boolean') return { booleanValue: item };
-              if (typeof item === 'number') return { doubleValue: item };
-              return { stringValue: String(item) };
-            })
-          }
-        };
-      } else {
-        fields[key] = { stringValue: String(val || '') };
-      }
-    }
-    return { fields };
-  }
-
-  function fromFirestoreJSON(doc: any) {
-    if (!doc || !doc.fields) return null;
-    const obj: any = {};
-    for (const [key, valObj] of Object.entries(doc.fields)) {
-      const vo = valObj as any;
-      if (vo.booleanValue !== undefined) {
-        obj[key] = vo.booleanValue;
-      } else if (vo.doubleValue !== undefined) {
-        obj[key] = Number(vo.doubleValue);
-      } else if (vo.integerValue !== undefined) {
-        obj[key] = Number(vo.integerValue);
-      } else if (vo.stringValue !== undefined) {
-        obj[key] = vo.stringValue;
-      } else if (vo.timestampValue !== undefined) {
-        obj[key] = vo.timestampValue;
-      } else if (vo.arrayValue) {
-        obj[key] = vo.arrayValue.values ? vo.arrayValue.values.map((v: any) => v.booleanValue ?? v.doubleValue ?? v.integerValue ?? v.stringValue ?? '') : [];
-      } else {
-        obj[key] = JSON.stringify(vo);
-      }
-    }
-    return obj;
-  }
-
-  function getFirestoreUrl() {
-    const projectId = process.env.VITE_FIREBASE_PROJECT_ID;
-    const databaseId = process.env.VITE_FIREBASE_DATABASE_ID || "(default)";
-    return `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${databaseId}/documents`;
-  }
-
-  function getApiKeyParam() {
-    const apiKey = process.env.VITE_FIREBASE_API_KEY;
-    return apiKey ? `?key=${apiKey}` : "";
-  }
-
-  let systemAuthToken: string = "";
-  let systemAuthTokenExpiry: number = 0;
-  let systemAuthTokenPromise: Promise<string> | null = null;
-
-  async function getSystemAuthToken(): Promise<string> {
-    if (systemAuthToken && Date.now() < systemAuthTokenExpiry - 60000) {
-      return systemAuthToken;
-    }
-
-    if (systemAuthTokenPromise) {
-      return systemAuthTokenPromise;
-    }
-
-    const projectId = process.env.VITE_FIREBASE_PROJECT_ID;
-    const apiKey = process.env.VITE_FIREBASE_API_KEY;
-    if (!projectId || !apiKey) {
-      throw new Error("VITE_FIREBASE_PROJECT_ID or VITE_FIREBASE_API_KEY is not configured in backend server environment.");
-    }
-
-    const email = "system-cron@stlaf-newsletter.com";
-    const password = "SystemCronSecurePass987#";
-
-    systemAuthTokenPromise = (async () => {
-      try {
-        // 1. Attempt to Sign-In
-        const signInUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`;
-        const signInResp = await axios.post(signInUrl, {
-          email,
-          password,
-          returnSecureToken: true
-        });
-        
-        systemAuthToken = signInResp.data.idToken;
-        systemAuthTokenExpiry = Date.now() + Number(signInResp.data.expiresIn) * 1000;
-        return systemAuthToken;
-      } catch (signInErr: any) {
-        const errCode = signInErr.response?.data?.error?.message;
-        if (errCode === "EMAIL_NOT_FOUND" || errCode === "USER_NOT_FOUND" || errCode === "INVALID_LOGIN_CREDENTIALS") {
-          console.log("[SYSTEM AUTH] System crawler account not found. Self-provisioning system-cron profile...");
-          try {
-            // 2. Register/Sign-Up the system user
-            const signUpUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${apiKey}`;
-            const signUpResp = await axios.post(signUpUrl, {
-              email,
-              password,
-              returnSecureToken: true
-            });
-            
-            const idToken = signUpResp.data.idToken;
-            const uid = signUpResp.data.localId;
-            const expiresIn = signUpResp.data.expiresIn;
-
-            // 3. Save profile to users collection to allow the 'isActive()' rule check to succeed
-            const userDocUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/users/${uid}?key=${apiKey}`;
-            const userDocData = {
-              fields: {
-                email: { stringValue: email },
-                role: { stringValue: "marketing_supervisor" },
-                status: { stringValue: "active" }
-              }
-            };
-            
-            await axios.put(userDocUrl, userDocData, {
-              headers: { 
-                "Content-Type": "application/json",
-                "X-Skip-System-Auth": "true",
-                "Authorization": `Bearer ${idToken}`
-              }
-            });
-            console.log("[SYSTEM AUTH] Self-provisioning of system profile was fully initialized and activated in Firestore!");
-
-            systemAuthToken = idToken;
-            systemAuthTokenExpiry = Date.now() + Number(expiresIn) * 1000;
-            return systemAuthToken;
-          } catch (signUpErr: any) {
-            console.error("[SYSTEM AUTH ERROR] Failed to perform system self-sign-up workflow:", signUpErr.response?.data || signUpErr.message);
-            throw new Error(`Self-registration failed: ${signUpErr.message}`);
-          }
-        } else {
-          console.error("[SYSTEM AUTH ERROR] Unexpected credentials rejection:", signInErr.response?.data || signInErr.message);
-          throw signInErr;
-        }
-      } finally {
-        systemAuthTokenPromise = null;
-      }
-    })();
-
-    return systemAuthTokenPromise;
-  }
-
-  // Intercept all outgoing axios requests to dynamically authenticate Firestore REST API calls
-  axios.interceptors.request.use(async (config) => {
-    if (config.url && config.url.includes("firestore.googleapis.com") && !config.headers?.["X-Skip-System-Auth"]) {
-      try {
-        const token = await getSystemAuthToken();
-        config.headers = config.headers || ({} as any);
-        if (config.headers.set) {
-          config.headers.set("Authorization", `Bearer ${token}`);
-        } else {
-          config.headers.Authorization = `Bearer ${token}`;
-        }
-      } catch (e: any) {
-        console.error("[AXIOS INTERCEPTOR] Firestore authorization injector bypassed:", e.message);
-      }
-    }
-    if (config.headers && config.headers["X-Skip-System-Auth"]) {
-      if (typeof config.headers.delete === "function") {
-        config.headers.delete("X-Skip-System-Auth");
-      } else {
-        delete config.headers["X-Skip-System-Auth"];
-      }
-    }
-    return config;
-  }, (error) => {
-    return Promise.reject(error);
-  });
-
-  // Intercept responses to handle 429 and rate/quota limits automatically via exponential backoff retry
-  axios.interceptors.response.use(
-    (response) => {
-      return response;
-    },
-    async (error: any) => {
-      const config = error.config;
-      const status = error.response?.status;
-      const errorMsg = error.response?.data?.error?.message || error.message || "";
-      
-      const isRateLimit = status === 429 || errorMsg.includes("Quota exceeded") || errorMsg.includes("RESOURCE_EXHAUSTED");
-      
-      if (isRateLimit && config) {
-        config._retryCount = config._retryCount || 0;
-        const maxRetries = 3;
-        if (config._retryCount < maxRetries) {
-          config._retryCount += 1;
-          const delay = Math.pow(2, config._retryCount) * 1000 + Math.floor(Math.random() * 500);
-          console.warn(`[AXIOS ERROR 429/QUOTA] Rate limit or quota exceeded for ${config.url}. Retrying in ${delay}ms... (Attempt ${config._retryCount} of ${maxRetries})`);
-          await new Promise((resolve) => setTimeout(resolve, delay));
-          return axios(config);
-        }
-      }
-      return Promise.reject(error);
-    }
-  );
+  // ── GMAIL CONFIG (Supabase) ───────────────────────────────────────────────
 
   let cachedGmailConfig: any = null;
   let lastGmailConfigFetch = 0;
@@ -267,160 +71,115 @@ async function startServer() {
     if (activeGmailConfigPromise) {
       return activeGmailConfigPromise;
     }
-    
-    const url = `${getFirestoreUrl()}/settings/gmail_config${getApiKeyParam()}`;
     activeGmailConfigPromise = (async () => {
       try {
-        const resp = await axios.get(url);
-        cachedGmailConfig = fromFirestoreJSON(resp.data);
+        const { data } = await supabase
+          .from('gmail_config')
+          .select('*')
+          .eq('id', 1)
+          .maybeSingle();
+        cachedGmailConfig = data || { connected: false };
         lastGmailConfigFetch = Date.now();
         return cachedGmailConfig;
       } catch (err: any) {
-        if (err.response?.status === 404) {
-          return { connected: false };
-        }
-        console.error("Error reading Gmail config from Firestore REST:", err.message);
+        console.error('Error reading Gmail config from Supabase:', err.message);
         return { connected: false };
       } finally {
         activeGmailConfigPromise = null;
       }
     })();
-    
     return activeGmailConfigPromise;
   }
 
   async function saveGmailConfig(config: any) {
-    const baseUrl = getFirestoreUrl();
-    const apiKey = getApiKeyParam();
-    const url = `${baseUrl}/settings/gmail_config${apiKey}`;
-    const docData = toFirestoreJSON(config);
     try {
-      await axios.patch(url, docData);
+      await supabase.from('gmail_config').update({
+        connected: config.connected,
+        authorized_email: config.authorizedEmail,
+        access_token: config.accessToken,
+        refresh_token: config.refreshToken,
+        token_expiry: config.tokenExpiry
+      }).eq('id', 1);
       cachedGmailConfig = Object.assign({}, cachedGmailConfig || {}, config);
       lastGmailConfigFetch = Date.now();
     } catch (err: any) {
-      console.error("Error saving Gmail config to Firestore REST:", err.response?.data || err.message);
+      console.error('Error saving Gmail config to Supabase:', err.message);
       throw err;
     }
   }
 
   async function createEmailLog(log: any) {
-    const baseUrl = getFirestoreUrl();
-    const apiKey = getApiKeyParam();
-    const url = `${baseUrl}/emailLogs${apiKey}`;
-    const docData = toFirestoreJSON(log);
     try {
-      await axios.post(url, docData);
+      await supabase.from('email_logs').insert({
+        campaign_id: log.campaignId,
+        recipient_email: log.recipientEmail,
+        status: log.status,
+        error_message: log.errorMessage || null,
+        sent_at: log.sentAt,
+        gmail_message_id: log.gmailMessageId || null
+      });
     } catch (err: any) {
-      console.error("Error saving Email Log to Firestore REST:", err.response?.data || err.message);
+      console.error('Error saving Email Log to Supabase:', err.message);
     }
   }
 
   async function updateCampaignCount(campaignId: string, status: string, sentCount: number, failedCount: number) {
-    const baseUrl = getFirestoreUrl();
-    const apiKey = getApiKeyParam();
-    
-    const updateMaskParams = [
-      'updateMask.fieldPaths=status',
-      'updateMask.fieldPaths=sentCount',
-      'updateMask.fieldPaths=failedCount'
-    ];
-    
-    const fields: any = {
-      status: { stringValue: status },
-      sentCount: { doubleValue: Number(sentCount) },
-      failedCount: { doubleValue: Number(failedCount) }
-    };
-
-    if (status === 'sent') {
-      updateMaskParams.push('updateMask.fieldPaths=sentAt');
-      fields.sentAt = { stringValue: new Date().toISOString() };
-    }
-
-    const keyParam = apiKey ? apiKey.replace('?', '') + '&' : '';
-    const url = `${baseUrl}/emailCampaigns/${campaignId}?${keyParam}${updateMaskParams.join('&')}`;
-    const docData = { fields };
-
+    const updates: any = { status, sent_count: sentCount, failed_count: failedCount };
+    if (status === 'sent') updates.sent_at = new Date().toISOString();
     try {
-      await axios.patch(url, docData);
+      await supabase.from('email_campaigns').update(updates).eq('id', campaignId);
     } catch (err: any) {
-      console.error(`Error updating emailCampaigns/${campaignId}:`, err.response?.data || err.message);
+      console.error(`Error updating email_campaigns/${campaignId}:`, err.message);
     }
   }
 
   async function registerEmailOpen(campaignId: string, recipientEmail: string) {
-    const baseUrl = getFirestoreUrl();
-    const apiKey = getApiKeyParam();
-    const url = `${baseUrl}/emailCampaigns/${campaignId}${apiKey}`;
     try {
-      const currentResp = await axios.get(url);
-      const currentData = fromFirestoreJSON(currentResp.data) || {};
-      
-      let openedEmails: string[] = [];
-      if (currentData.openedEmails) {
-        if (Array.isArray(currentData.openedEmails)) {
-          openedEmails = currentData.openedEmails;
-        } else if (typeof currentData.openedEmails === 'string') {
-          try { openedEmails = JSON.parse(currentData.openedEmails); } catch(e) {}
-        }
-      }
-      
+      const { data: current } = await supabase
+        .from('email_campaigns')
+        .select('opens_count, opened_emails')
+        .eq('id', campaignId)
+        .maybeSingle();
+      if (!current) return;
+
+      const openedEmails: string[] = Array.isArray(current.opened_emails) ? current.opened_emails : [];
       const emailLower = recipientEmail ? recipientEmail.trim().toLowerCase() : '';
-      let isNewUniqueOpen = false;
-      if (emailLower && !openedEmails.map(e => e.toLowerCase()).includes(emailLower)) {
-        openedEmails.push(emailLower);
-        isNewUniqueOpen = true;
-      }
-      
-      const currentOpens = typeof currentData.opensCount === 'number' ? currentData.opensCount : 0;
-      const updatedData = {
-        ...currentData,
-        opensCount: currentOpens + 1,
-        openedEmails: openedEmails
-      };
-      
-      await axios.patch(url, toFirestoreJSON(updatedData));
-      console.log(`[TRACKING] Successfully registered open for ${recipientEmail} on campaign ${campaignId}. Unique=${isNewUniqueOpen}, New open count: ${currentOpens + 1}`);
+      const isNewUniqueOpen = emailLower && !openedEmails.map((e: string) => e.toLowerCase()).includes(emailLower);
+      if (isNewUniqueOpen) openedEmails.push(emailLower);
+
+      const newCount = (current.opens_count || 0) + 1;
+      await supabase.from('email_campaigns').update({
+        opens_count: newCount,
+        opened_emails: openedEmails
+      }).eq('id', campaignId);
+      console.log(`[TRACKING] Registered open for ${recipientEmail} on campaign ${campaignId}. Unique=${isNewUniqueOpen}, opens: ${newCount}`);
     } catch (err: any) {
-      console.error(`Error registering open on emailCampaigns/${campaignId}:`, err.response?.data || err.message);
+      console.error(`Error registering open on email_campaigns/${campaignId}:`, err.message);
     }
   }
 
   async function registerEmailClick(campaignId: string, recipientEmail: string) {
-    const baseUrl = getFirestoreUrl();
-    const apiKey = getApiKeyParam();
-    const url = `${baseUrl}/emailCampaigns/${campaignId}${apiKey}`;
     try {
-      const currentResp = await axios.get(url);
-      const currentData = fromFirestoreJSON(currentResp.data) || {};
-      
-      let clickedEmails: string[] = [];
-      if (currentData.clickedEmails) {
-        if (Array.isArray(currentData.clickedEmails)) {
-          clickedEmails = currentData.clickedEmails;
-        } else if (typeof currentData.clickedEmails === 'string') {
-          try { clickedEmails = JSON.parse(currentData.clickedEmails); } catch(e) {}
-        }
-      }
-      
+      const { data: current } = await supabase
+        .from('email_campaigns')
+        .select('clicks_count, clicked_emails')
+        .eq('id', campaignId)
+        .maybeSingle();
+      if (!current) return;
+
+      const clickedEmails: string[] = Array.isArray(current.clicked_emails) ? current.clicked_emails : [];
       const emailLower = recipientEmail ? recipientEmail.trim().toLowerCase() : '';
-      let isNewUniqueClick = false;
-      if (emailLower && !clickedEmails.map(e => e.toLowerCase()).includes(emailLower)) {
-        clickedEmails.push(emailLower);
-        isNewUniqueClick = true;
-      }
-      
-      const currentClicks = typeof currentData.clicksCount === 'number' ? currentData.clicksCount : 0;
-      const updatedData = {
-        ...currentData,
-        clicksCount: currentClicks + 1,
-        clickedEmails: clickedEmails
-      };
-      
-      await axios.patch(url, toFirestoreJSON(updatedData));
-      console.log(`[TRACKING] Successfully registered click for ${recipientEmail} on campaign ${campaignId}. Unique=${isNewUniqueClick}, New click count: ${currentClicks + 1}`);
+      const isNewUniqueClick = emailLower && !clickedEmails.map((e: string) => e.toLowerCase()).includes(emailLower);
+      if (isNewUniqueClick) clickedEmails.push(emailLower);
+
+      const newCount = (current.clicks_count || 0) + 1;
+      await supabase.from('email_campaigns').update({
+        clicks_count: newCount,
+        clicked_emails: clickedEmails
+      }).eq('id', campaignId);
+      console.log(`[TRACKING] Registered click for ${recipientEmail} on campaign ${campaignId}. Unique=${isNewUniqueClick}, clicks: ${newCount}`);
     } catch (err: any) {
-      console.error(`Error registering click on emailCampaigns/${campaignId}:`, err.response?.data || err.message);
+      console.error(`Error registering click on email_campaigns/${campaignId}:`, err.message);
     }
   }
 
@@ -430,25 +189,14 @@ async function startServer() {
 
   async function updateImportedPostStatus(postId: string, mailStatus: string) {
     if (!postId) return;
-    const baseUrl = getFirestoreUrl();
-    const apiKey = getApiKeyParam();
-    const url = `${baseUrl}/posts/${postId}${apiKey}`;
     try {
-      const currentResp = await axios.get(url);
-      const currentData = fromFirestoreJSON(currentResp.data) || {};
-      const updatedData = {
-        ...currentData,
-        mailStatus,
-        mailSentTime: new Date().toISOString()
-      };
-      await axios.patch(url, toFirestoreJSON(updatedData));
-      console.log(`[LOCAL SCHEDULE] Successfully updated handoff post ${postId} mailStatus directly to ${mailStatus}`);
+      await supabase.from('posts').update({
+        mail_status: mailStatus,
+        mail_sent_time: new Date().toISOString()
+      }).eq('id', postId);
+      console.log(`[LOCAL SCHEDULE] Updated post ${postId} mailStatus to ${mailStatus}`);
     } catch (err: any) {
-      if (err.response?.status === 404) {
-        console.log(`[LOCAL SCHEDULE] Handoff post ${postId} not found in Firestore (possibly archived).`);
-      } else {
-        console.error(`[LOCAL SCHEDULE] Error updating post ${postId}:`, err.response?.data || err.message);
-      }
+      console.error(`[LOCAL SCHEDULE] Error updating post ${postId}:`, err.message);
     }
   }
 
@@ -456,10 +204,10 @@ async function startServer() {
     if (!gmailConfig || !gmailConfig.connected) {
       throw new Error("Gmail is not connected.");
     }
-    if (gmailConfig.accessToken && gmailConfig.tokenExpiry && Date.now() < gmailConfig.tokenExpiry - 60000) {
-      return gmailConfig.accessToken;
+    if (gmailConfig.access_token && gmailConfig.token_expiry && Date.now() < gmailConfig.token_expiry - 60000) {
+      return gmailConfig.access_token;
     }
-    if (!gmailConfig.refreshToken) {
+    if (!gmailConfig.refresh_token) {
       throw new Error("Refresh token is missing.");
     }
     const clientId = process.env.GMAIL_CLIENT_ID;
@@ -471,12 +219,12 @@ async function startServer() {
       const resp = await axios.post("https://oauth2.googleapis.com/token", {
         client_id: clientId,
         client_secret: clientSecret,
-        refresh_token: gmailConfig.refreshToken,
+        refresh_token: gmailConfig.refresh_token,
         grant_type: "refresh_token"
       });
       const { access_token, expires_in } = resp.data;
       const tokenExpiry = Date.now() + expires_in * 1000;
-      
+
       const newConfig = {
         ...gmailConfig,
         accessToken: access_token,
@@ -615,8 +363,8 @@ async function startServer() {
     addLog("Local Cron Route Triggered.");
 
     const envs = {
-      VITE_FIREBASE_PROJECT_ID: process.env.VITE_FIREBASE_PROJECT_ID ? `${process.env.VITE_FIREBASE_PROJECT_ID.substring(0, 4)}***` : "MISSING",
-      VITE_FIREBASE_API_KEY: process.env.VITE_FIREBASE_API_KEY ? "CONFIGURED (hidden)" : "MISSING",
+      SUPABASE_URL: process.env.SUPABASE_URL ? "CONFIGURED (hidden)" : "MISSING",
+      SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY ? "CONFIGURED (hidden)" : "MISSING",
       GMAIL_CLIENT_ID: process.env.GMAIL_CLIENT_ID ? `${process.env.GMAIL_CLIENT_ID.substring(0, 10)}***` : "MISSING",
       GMAIL_CLIENT_SECRET: process.env.GMAIL_CLIENT_SECRET ? "CONFIGURED (hidden)" : "MISSING",
       GMAIL_REDIRECT_URI: process.env.GMAIL_REDIRECT_URI || "MISSING"
@@ -634,24 +382,24 @@ async function startServer() {
       details: []
     };
 
-    if (!process.env.VITE_FIREBASE_PROJECT_ID || !process.env.VITE_FIREBASE_API_KEY) {
-      addLog("CRITICAL ERROR: Firebase Config is missing in environment variables!");
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SECRET_KEY) {
+      addLog("CRITICAL ERROR: Supabase config is missing in environment variables!");
       return res.status(500).json({
         ...report,
-        message: "Environment variables VITE_FIREBASE_PROJECT_ID or VITE_FIREBASE_API_KEY are not configured."
+        message: "Environment variables SUPABASE_URL or SUPABASE_SECRET_KEY are not configured."
       });
     }
 
     try {
-      addLog("Fetching Gmail config from Firestore...");
+      addLog("Fetching Gmail config from Supabase...");
       const config = await getGmailConfig();
       addLog(`Gmail info retrieved successfully. Connected status in DB: ${config?.connected}`);
-      
+
       report.gmailConfig = {
         connected: !!config?.connected,
-        authorizedEmail: config?.authorizedEmail || null,
-        tokenExpiry: config?.tokenExpiry || null,
-        hasRefreshToken: !!config?.refreshToken
+        authorizedEmail: config?.authorized_email || null,
+        tokenExpiry: config?.token_expiry || null,
+        hasRefreshToken: !!config?.refresh_token
       };
 
       if (!config || !config.connected) {
@@ -665,26 +413,24 @@ async function startServer() {
       const forceCampaignId = req.query.forceCampaignId as string | undefined;
       const forceRefresh = !!req.query.force || !!forceCampaignId;
 
-      addLog(`Fetching email campaigns from Firestore (forceRefresh: ${forceRefresh})...`);
-      let documents: any[] = [];
+      addLog(`Fetching email campaigns from Supabase (forceRefresh: ${forceRefresh})...`);
+      let campaigns: any[] = [];
       try {
         if (forceCampaignId) {
-          const docUrl = getFirestoreRestUrl(`emailCampaigns/${forceCampaignId}`);
-          const docResp = await axios.get(docUrl);
-          documents = [docResp.data];
+          const { data } = await supabase.from('email_campaigns').select('*').eq('id', forceCampaignId).maybeSingle();
+          campaigns = data ? [data] : [];
         } else {
-          documents = await fetchScheduledCampaigns();
+          campaigns = await fetchScheduledCampaigns();
         }
       } catch (campErr: any) {
-        addLog(`Failed to fetch campaigns: ${campErr.response?.data?.error?.message || campErr.message}`);
+        addLog(`Failed to fetch campaigns: ${campErr.message}`);
         return res.status(500).json({
           ...report,
-          message: `Firestore REST API error fetching campaigns: ${campErr.message}`,
-          errorDetails: campErr.response?.data || null
+          message: `Supabase error fetching campaigns: ${campErr.message}`
         });
       }
-      report.campaignsChecked = documents.length;
-      addLog(`Found ${documents.length} campaigns in database.`);
+      report.campaignsChecked = campaigns.length;
+      addLog(`Found ${campaigns.length} campaigns in database.`);
 
       const protocol = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
       const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
@@ -693,11 +439,9 @@ async function startServer() {
         hostUrl = hostUrl.replace("http://", "https://");
       }
 
-      for (const doc of documents) {
-        const id = doc.name.split("/").pop();
+      for (const campaign of campaigns) {
+        const id = campaign.id;
         if (!id) continue;
-        const campaign = fromFirestoreJSON(doc);
-        if (!campaign) continue;
 
         // Skip other campaigns if we are forcing a specific campaign
         if (forceCampaignId && id !== forceCampaignId) {
@@ -708,27 +452,27 @@ async function startServer() {
           id,
           title: campaign.title,
           status: campaign.status,
-          scheduledAt: campaign.scheduledAt || null,
+          scheduledAt: campaign.scheduled_at || null,
           reason: ""
         };
 
         const isForced = forceCampaignId && id === forceCampaignId;
 
         if (campaign.status === "scheduled" || isForced) {
-          if (!campaign.scheduledAt && !isForced) {
-            campaignInfo.reason = "Ignored: Status is 'scheduled' but scheduledAt timestamp is empty.";
-            addLog(`Campaign "${campaign.title}" (${id}) ignored: scheduledAt is empty.`);
+          if (!campaign.scheduled_at && !isForced) {
+            campaignInfo.reason = "Ignored: Status is 'scheduled' but scheduled_at timestamp is empty.";
+            addLog(`Campaign "${campaign.title}" (${id}) ignored: scheduled_at is empty.`);
           } else {
-            const schedTime = new Date(campaign.scheduledAt || "").getTime();
+            const schedTime = new Date(campaign.scheduled_at || "").getTime();
             const nowTime = Date.now();
 
             if (isNaN(schedTime) && !isForced) {
-              campaignInfo.reason = `Ignored: Invalid scheduled date format: "${campaign.scheduledAt}"`;
+              campaignInfo.reason = `Ignored: Invalid scheduled date format: "${campaign.scheduled_at}"`;
               addLog(`Campaign "${campaign.title}" (${id}) ignored: invalid scheduled time format.`);
             } else if (schedTime > nowTime && !isForced) {
               const timeDiffSec = Math.round((schedTime - nowTime) / 1000);
-              campaignInfo.reason = `Waiting: Scheduled for ${campaign.scheduledAt} (triggers in ${timeDiffSec} seconds).`;
-              addLog(`Campaign "${campaign.title}" (${id}) is in the future. Scheduled: ${campaign.scheduledAt}. current: ${report.currentTime}`);
+              campaignInfo.reason = `Waiting: Scheduled for ${campaign.scheduled_at} (triggers in ${timeDiffSec} seconds).`;
+              addLog(`Campaign "${campaign.title}" (${id}) is in the future. Scheduled: ${campaign.scheduled_at}. current: ${report.currentTime}`);
             } else if (activeScheduledSends.has(id)) {
               campaignInfo.reason = "Ignored: Already processing sending lock.";
               addLog(`Campaign "${campaign.title}" (${id}) skipped: sending lock already active.`);
@@ -737,7 +481,7 @@ async function startServer() {
               addLog(`TRIGGERED${isForced ? ' (FORCED)' : ''}: "${campaign.title}" (${id}) has reached its time or was forced!`);
               activeScheduledSends.add(id);
               report.triggeredCampaigns.push({ id, title: campaign.title });
-              
+
               try {
                 // Mark as sending in DB immediately to prevent duplicate runs
                 await updateCampaignCount(id, "sending", 0, 0);
@@ -771,7 +515,7 @@ async function startServer() {
     }
   });
 
-  // Image Upload Proxy with Firestore Fallback Hosted Storage
+  // Image Upload Proxy with Supabase Storage fallback
   app.post("/api/upload", async (req, res) => {
     const { fileData, fileName, fileType } = req.body;
     if (!fileData) {
@@ -779,11 +523,6 @@ async function startServer() {
     }
 
     try {
-      const bucket = process.env.VITE_FIREBASE_STORAGE_BUCKET;
-      if (!bucket) {
-        throw new Error("VITE_FIREBASE_STORAGE_BUCKET environment variable is not configured on the server.");
-      }
-
       // Convert base64 to buffer
       let base64Pure = fileData;
       if (fileData.startsWith("data:")) {
@@ -793,45 +532,34 @@ async function startServer() {
         }
       }
       const buffer = Buffer.from(base64Pure, "base64");
-
-      // Upload to Firebase Storage via REST API
       const safeFileName = `campaign-images/${Date.now()}_${fileName.replace(/[^a-zA-Z0-9.]/g, "_")}`;
-      const uploadUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket}/o?name=${encodeURIComponent(safeFileName)}`;
 
-      console.log(`[UPLOAD PROXY] Uploading ${safeFileName} to Firebase Storage: ${uploadUrl}`);
-      
-      const response = await axios.post(uploadUrl, buffer, {
-        headers: {
-          "Content-Type": fileType || "image/png",
-        }
-      });
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('uploads')
+        .upload(safeFileName, buffer, { contentType: fileType || 'image/png', upsert: true });
 
-      const { name: uploadedName, downloadTokens } = response.data;
-      const downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket}/o/${encodeURIComponent(uploadedName)}?alt=media&token=${downloadTokens || ""}`;
+      if (uploadError) throw new Error(uploadError.message);
 
-      console.log(`[UPLOAD PROXY] Successfully uploaded to Storage: ${downloadUrl}`);
+      const { data: urlData } = supabase.storage.from('uploads').getPublicUrl(safeFileName);
+      const downloadUrl = urlData.publicUrl;
+
+      console.log(`[UPLOAD PROXY] Successfully uploaded to Supabase Storage: ${downloadUrl}`);
       res.json({ success: true, downloadUrl });
     } catch (err: any) {
-      console.error("[UPLOAD PROXY ERR] Failed to upload to Firebase Storage:", err.response?.data || err.message);
-      
-      // Since Firebase Storage might have CORS or permission limits, use Firestore-based fallback
-      try {
-        console.log("[UPLOAD PROXY] Attempting fallback to Firestore storage...");
-        const safeFileName = `${Date.now()}_${fileName.replace(/[^a-zA-Z0-9.]/g, "_")}`;
-        
-        const imageDoc = {
-          fileName: fileName,
-          fileType: fileType || "image/png",
-          base64: fileData, // full data URI
-          uploadedAt: new Date().toISOString()
-        };
+      console.error("[UPLOAD PROXY ERR] Failed to upload:", err.message);
 
-        const baseUrl = getFirestoreUrl();
-        const apiKey = getApiKeyParam();
-        const url = `${baseUrl}/uploadedImages/${safeFileName}${apiKey}`;
-        
-        await axios.patch(url, toFirestoreJSON(imageDoc));
-        
+      // Fallback: store image as base64 row in Supabase
+      try {
+        console.log("[UPLOAD PROXY] Attempting fallback to Supabase DB storage...");
+        const safeFileName = `${Date.now()}_${fileName.replace(/[^a-zA-Z0-9.]/g, "_")}`;
+
+        await supabase.from('uploaded_images').insert({
+          file_name: fileName,
+          file_type: fileType || 'image/png',
+          base64: fileData,
+          uploaded_at: new Date().toISOString()
+        });
+
         const protocol = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
         const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
         let hostUrl = `${protocol}://${host}`;
@@ -839,35 +567,35 @@ async function startServer() {
           hostUrl = hostUrl.replace("http://", "https://");
         }
         const downloadUrl = `${hostUrl}/api/hosted-images?id=${safeFileName}`;
-        
-        console.log(`[UPLOAD PROXY] Fallback successful! Serving via Firestore proxy: ${downloadUrl}`);
+
+        console.log(`[UPLOAD PROXY] Fallback successful! Serving via Supabase proxy: ${downloadUrl}`);
         res.json({ success: true, downloadUrl });
       } catch (fallbackErr: any) {
-        console.error("[UPLOAD PROXY FALLBACK ERR] Failed fallback to Firestore:", fallbackErr.response?.data || fallbackErr.message);
+        console.error("[UPLOAD PROXY FALLBACK ERR] Failed fallback to Supabase:", fallbackErr.message);
         res.status(500).json({ error: `Upload failed: ${err.message}` });
       }
     }
   });
 
-  // Serve Fallback Hosted Images from Firestore (supporting both ?id= and /:id formats)
+  // Serve Fallback Hosted Images from Supabase (supporting both ?id= and /:id formats)
   app.get("/api/hosted-images", async (req, res) => {
     const id = req.query.id as string;
     if (!id) {
       return res.status(400).send("Parameter 'id' is required.");
     }
     try {
-      const baseUrl = getFirestoreUrl();
-      const apiKey = getApiKeyParam();
-      const url = `${baseUrl}/uploadedImages/${id}${apiKey}`;
-      const response = await axios.get(url);
-      const doc = fromFirestoreJSON(response.data);
+      const { data: doc } = await supabase
+        .from('uploaded_images')
+        .select('base64, file_type')
+        .eq('file_name', id)
+        .maybeSingle();
       if (!doc || !doc.base64) {
         return res.status(404).send("Image not found");
       }
 
       let base64Pure = doc.base64;
-      let contentType = doc.fileType || "image/png";
-      
+      let contentType = doc.file_type || "image/png";
+
       if (doc.base64.startsWith("data:")) {
         const parts = doc.base64.split(";base64,");
         if (parts.length > 1) {
@@ -890,18 +618,18 @@ async function startServer() {
   app.get("/api/hosted-images/:id", async (req, res) => {
     const { id } = req.params;
     try {
-      const baseUrl = getFirestoreUrl();
-      const apiKey = getApiKeyParam();
-      const url = `${baseUrl}/uploadedImages/${id}${apiKey}`;
-      const response = await axios.get(url);
-      const doc = fromFirestoreJSON(response.data);
+      const { data: doc } = await supabase
+        .from('uploaded_images')
+        .select('base64, file_type')
+        .eq('file_name', id)
+        .maybeSingle();
       if (!doc || !doc.base64) {
         return res.status(404).send("Image not found");
       }
 
       let base64Pure = doc.base64;
-      let contentType = doc.fileType || "image/png";
-      
+      let contentType = doc.file_type || "image/png";
+
       if (doc.base64.startsWith("data:")) {
         const parts = doc.base64.split(";base64,");
         if (parts.length > 1) {
@@ -1037,7 +765,7 @@ async function startServer() {
       });
       res.json({
         connected: !!config.connected,
-        authorizedEmail: config.authorizedEmail || null
+        authorizedEmail: config.authorized_email || null
       });
     } catch (err: any) {
       res.json({ connected: false });
@@ -1072,26 +800,23 @@ async function startServer() {
         return res.status(400).json({ error: "Gmail is not connected. Connect Gmail first." });
       }
       const accessToken = await getOrRefreshAccessToken(config);
-      
-      const campaignUrl = `${getFirestoreUrl()}/emailCampaigns/${campaignId}${getApiKeyParam()}`;
-      const campaignResp = await axios.get(campaignUrl);
-      const campaign = fromFirestoreJSON(campaignResp.data);
+
+      const { data: campaign } = await supabase
+        .from('email_campaigns')
+        .select('*')
+        .eq('id', campaignId)
+        .maybeSingle();
       if (!campaign) {
         return res.status(404).json({ error: "Campaign not found." });
       }
 
-      // Parse campaign-level attachments
-      let attachments: any[] = [];
-      if (campaign?.attachmentsJson) {
-        try {
-          attachments = JSON.parse(campaign.attachmentsJson);
-        } catch (e) {
-          console.error("Error parsing campaign attachmentsJson:", e);
-        }
-      }
-      
+      // Parse campaign-level attachments (stored as JSONB or JSON string)
+      const attachments: any[] = Array.isArray(campaign.attachments_json)
+        ? campaign.attachments_json
+        : (campaign.attachments_json ? (() => { try { return JSON.parse(campaign.attachments_json); } catch(e) { return []; } })() : []);
+
       await updateCampaignCount(campaignId, 'sending', 0, 0);
-      
+
       let hostUrl = '';
       const referer = req.headers.referer;
       if (referer && referer.startsWith('http')) {
@@ -1144,7 +869,7 @@ async function startServer() {
 
         try {
           body = injectTrackingToBody(body, campaignId, rec.email, hostUrl);
-          const rawMessage = buildMimeMessage(rec.email, config.authorizedEmail, subject, body, attachments);
+          const rawMessage = buildMimeMessage(rec.email, config.authorized_email, subject, body, attachments);
           const sendResp = await axios.post(
             "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
             { raw: rawMessage },
@@ -1188,14 +913,12 @@ async function startServer() {
     }
 
     try {
-      // 1. Fetch all subscribers to see if email already exists
-      const allDocs = await fetchFirestoreCollection("subscribers", true);
-      const subscribers = allDocs.map((d: any) => {
-        const sId = d.name.split("/").pop();
-        return { id: sId, ...fromFirestoreJSON(d) };
-      });
+      const { data: existing } = await supabase
+        .from('subscribers')
+        .select('*')
+        .ilike('email', email)
+        .maybeSingle();
 
-      const existing = subscribers.find((s: any) => s.email && s.email.toLowerCase() === email.toLowerCase());
       const finalTags = Array.isArray(tags) ? tags : ["Newsletter"];
 
       // Setup verification properties
@@ -1214,10 +937,7 @@ async function startServer() {
       // Attempt to send confirmation email via Gmail config if connected
       let emailSent = false;
       const config = await getGmailConfig();
-      const isGmailConnected = config && config.connected && config.authorizedEmail;
-
-      // Always require verification (status: "pending") to enforce double opt-in GDPR compliance
-      const targetStatus = "pending";
+      const isGmailConnected = config && config.connected && config.authorized_email;
 
       if (isGmailConnected) {
         try {
@@ -1244,7 +964,7 @@ async function startServer() {
               </p>
             </div>
           `;
-          const rawMessage = buildMimeMessage(email, config.authorizedEmail, subject, body);
+          const rawMessage = buildMimeMessage(email, config.authorized_email, subject, body);
           await axios.post(
             "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
             { raw: rawMessage },
@@ -1258,57 +978,37 @@ async function startServer() {
       }
 
       if (existing) {
-        // Merge tags
-        let subTags: string[] = [];
-        if (Array.isArray(existing.tags)) {
-          subTags = existing.tags;
-        } else if (typeof existing.tags === 'string') {
-          try {
-            subTags = JSON.parse(existing.tags);
-          } catch(e) {
-            subTags = [existing.tags];
-          }
-        }
-        const mergedTags = Array.from(new Set([...subTags, ...finalTags]));
-        
-        const updated = {
-          ...existing,
+        const mergedTags = Array.from(new Set([...(Array.isArray(existing.tags) ? existing.tags : []), ...finalTags]));
+        await supabase.from('subscribers').update({
           name: name || existing.name,
-          status: targetStatus,
+          status: 'pending',
           tags: mergedTags,
-          verificationToken,
-          verificationExpiresAt
-        };
-
-        const patchUrl = getFirestoreRestUrl(`subscribers/${existing.id}`);
-        await axios.patch(patchUrl, toFirestoreJSON(updated));
+          verification_token: verificationToken,
+          verification_expires_at: verificationExpiresAt
+        }).eq('id', existing.id);
         console.log(`[PUBLIC SUBSCRIPTION] Updated subscriber to pending (unverified) state: ${email}`);
       } else {
-        // Create new subscriber
-        const newSub = {
+        await supabase.from('subscribers').insert({
           name,
           email,
-          status: targetStatus,
+          status: 'pending',
           tags: finalTags,
-          addedAt: new Date().toISOString(),
-          addedBy: "public-portal",
-          verificationToken,
-          verificationExpiresAt
-        };
-        const postUrl = getFirestoreRestUrl("subscribers");
-        await axios.post(postUrl, toFirestoreJSON(newSub));
+          added_at: new Date().toISOString(),
+          added_by: 'public-portal',
+          verification_token: verificationToken,
+          verification_expires_at: verificationExpiresAt
+        });
         console.log(`[PUBLIC SUBSCRIPTION] Added new unverified pending subscriber: ${email}`);
       }
 
-      res.json({ 
-        success: true, 
-        emailSent, 
+      res.json({
+        success: true,
+        emailSent,
         verificationNeeded: true,
-        // Provided as developer option if Gmail config is not connected
-        devVerificationUrl: verificationUrl 
+        devVerificationUrl: verificationUrl
       });
     } catch (err: any) {
-      console.error("[PUBLIC SUBSCRIPTION ERR]", err.response?.data || err.message);
+      console.error("[PUBLIC SUBSCRIPTION ERR]", err.message);
       res.status(500).json({ success: false, error: err.message });
     }
   });
@@ -1321,51 +1021,38 @@ async function startServer() {
     }
 
     try {
-      // 1. Fetch matching subscriber
-      const allDocs = await fetchFirestoreCollection("subscribers", true);
-      const subscribers = allDocs.map((d: any) => {
-        const sId = d.name.split("/").pop();
-        return { id: sId, ...fromFirestoreJSON(d) };
-      });
+      const { data: existing } = await supabase
+        .from('subscribers')
+        .select('*')
+        .ilike('email', email as string)
+        .maybeSingle();
 
-      const existing = subscribers.find((s: any) => s.email && s.email.toLowerCase() === (email as string).toLowerCase());
       if (!existing) {
         return res.redirect(`${lastSeenHostUrl}/subscribe?verified=invalid`);
       }
 
-      // Check status & token
       if (existing.status === 'active') {
-        // Already verified and active! Just send them back successfully
         return res.redirect(`${lastSeenHostUrl}/subscribe?verified=success&email=${encodeURIComponent(existing.email)}`);
       }
 
-      if (existing.verificationToken !== token) {
+      if (existing.verification_token !== token) {
         return res.redirect(`${lastSeenHostUrl}/subscribe?verified=invalid`);
       }
 
-      // Check expiration
-      if (existing.verificationExpiresAt) {
-        const expiresAt = new Date(existing.verificationExpiresAt);
+      if (existing.verification_expires_at) {
+        const expiresAt = new Date(existing.verification_expires_at);
         if (isNaN(expiresAt.getTime()) || expiresAt < new Date()) {
-          // Expired. Remove subscriber so they can try again fresh!
-          const deleteUrl = getFirestoreRestUrl(`subscribers/${existing.id}`);
-          await axios.delete(deleteUrl);
+          await supabase.from('subscribers').delete().eq('id', existing.id);
           return res.redirect(`${lastSeenHostUrl}/subscribe?verified=expired`);
         }
       }
 
-      // Activate subscriber
-      const updated = {
-        ...existing,
-        status: "active",
-        verifiedAt: new Date().toISOString()
-      };
-      // Delete verification token properties
-      delete updated.verificationToken;
-      delete updated.verificationExpiresAt;
-
-      const patchUrl = getFirestoreRestUrl(`subscribers/${existing.id}`);
-      await axios.patch(patchUrl, toFirestoreJSON(updated));
+      await supabase.from('subscribers').update({
+        status: 'active',
+        verified_at: new Date().toISOString(),
+        verification_token: null,
+        verification_expires_at: null
+      }).eq('id', existing.id);
 
       console.log(`[PUBLIC SUBSCRIPTION] Verified subscriber: ${email}`);
       return res.redirect(`${lastSeenHostUrl}/subscribe?verified=success&email=${encodeURIComponent(existing.email)}`);
@@ -1382,46 +1069,35 @@ async function startServer() {
     }
 
     try {
-      // 1. Fetch subscribers to locate match
-      const allDocs = await fetchFirestoreCollection("subscribers", true);
-      const subscribers = allDocs.map((d: any) => {
-        const sId = d.name.split("/").pop();
-        return { id: sId, ...fromFirestoreJSON(d) };
-      });
-
-      const existing = subscribers.find((s: any) => s.email && s.email.toLowerCase() === email.toLowerCase());
+      const { data: existing } = await supabase
+        .from('subscribers')
+        .select('*')
+        .ilike('email', email)
+        .maybeSingle();
 
       if (existing) {
-        const updated = {
-          ...existing,
-          status: "unsubscribed",
-          unsubscribeReason: reason || "No reason specified",
-          unsubscribedAt: new Date().toISOString()
-        };
-
-        const patchUrl = getFirestoreRestUrl(`subscribers/${existing.id}`);
-        await axios.patch(patchUrl, toFirestoreJSON(updated));
+        await supabase.from('subscribers').update({
+          status: 'unsubscribed',
+          unsubscribe_reason: reason || 'No reason specified',
+          unsubscribed_at: new Date().toISOString()
+        }).eq('id', existing.id);
         console.log(`[PUBLIC OPT-OUT] Unsubscribed subscriber: ${email}. Reason: ${reason}`);
         res.json({ success: true, found: true });
       } else {
-        // Email wasn't found in current active list, but we still want to make sure they are recorded so they don't get emailed
-        // Let's add them as an "unsubscribed" record just in case!
-        const newUnsub = {
-          name: "Anonymous",
+        await supabase.from('subscribers').insert({
+          name: 'Anonymous',
           email,
-          status: "unsubscribed",
-          tags: ["Unsubscribed"],
-          addedAt: new Date().toISOString(),
-          addedBy: "public-portal-optout",
-          unsubscribeReason: reason || "No reason specified"
-        };
-        const postUrl = getFirestoreRestUrl("subscribers");
-        await axios.post(postUrl, toFirestoreJSON(newUnsub));
+          status: 'unsubscribed',
+          tags: ['Unsubscribed'],
+          added_at: new Date().toISOString(),
+          added_by: 'public-portal-optout',
+          unsubscribe_reason: reason || 'No reason specified'
+        });
         console.log(`[PUBLIC OPT-OUT] Created unsubscribed record for unregistered email: ${email}`);
         res.json({ success: true, found: false });
       }
     } catch (err: any) {
-      console.error("[PUBLIC OPT-OUT ERR]", err.response?.data || err.message);
+      console.error("[PUBLIC OPT-OUT ERR]", err.message);
       res.status(500).json({ success: false, error: err.message });
     }
   });
@@ -1479,115 +1155,9 @@ async function startServer() {
   // Set to keep track of campaign IDs that are currently being processed
   const activeScheduledSends = new Set<string>();
 
-  // In-memory cache for Firestore collections to prevent rate-limiting/429 & quota-exceeded
-  interface CacheEntry {
-    data: any[];
-    timestamp: number;
-  }
-  const firestoreCache: Record<string, CacheEntry> = {};
-  const CACHE_TTL_MS = 180000; // 3 minutes (180,000 ms) to aggressively prevent rate-limits / 429 / quota exceeded
-
-  // Helper to build Firestore API Urls with query params cleanly
-  function getFirestoreRestUrl(collectionPath: string, extraParams: string = "") {
-    const baseUrl = getFirestoreUrl();
-    const apiKey = process.env.VITE_FIREBASE_API_KEY;
-    let url = `${baseUrl}/${collectionPath}`;
-    const params: string[] = [];
-    if (apiKey) {
-      params.push(`key=${apiKey}`);
-    }
-    if (extraParams) {
-      params.push(extraParams);
-    }
-    if (params.length > 0) {
-      url += `?${params.join("&")}`;
-    }
-    return url;
-  }
-
-  async function fetchFirestoreCollection(collectionPath: string, forceRefresh: boolean = false): Promise<any[]> {
-    const now = Date.now();
-    if (!forceRefresh && firestoreCache[collectionPath] && (now - firestoreCache[collectionPath].timestamp < CACHE_TTL_MS)) {
-      console.log(`[FIRESTORE CACHE] Serving cached documents for "${collectionPath}" (age: ${Math.round((now - firestoreCache[collectionPath].timestamp) / 1000)}s)`);
-      return firestoreCache[collectionPath].data;
-    }
-
-    let allDocuments: any[] = [];
-    let pageToken = "";
-    let loopCount = 0;
-    
-    do {
-      if (loopCount > 0) {
-        // Pacing delay to prevent rate limits/429 during pagination loop
-        await new Promise(resolve => setTimeout(resolve, 250));
-      }
-      const extraParams = `pageSize=100${pageToken ? `&pageToken=${pageToken}` : ""}`;
-      const url = getFirestoreRestUrl(collectionPath, extraParams);
-      const resp = await axios.get(url);
-      const docs = resp.data?.documents || [];
-      allDocuments = [...allDocuments, ...docs];
-      pageToken = resp.data?.nextPageToken || "";
-      loopCount++;
-    } while (pageToken && loopCount < 30);
-    
-    firestoreCache[collectionPath] = {
-      data: allDocuments,
-      timestamp: now
-    };
-    
-    return allDocuments;
-  }
-
   async function fetchScheduledCampaigns(): Promise<any[]> {
-    const url = `${getFirestoreUrl()}:runQuery${getApiKeyParam()}`;
-    const payload = {
-      structuredQuery: {
-        from: [{ collectionId: "emailCampaigns" }],
-        where: {
-          fieldFilter: {
-            field: { fieldPath: "status" },
-            op: "EQUAL",
-            value: { stringValue: "scheduled" }
-          }
-        }
-      }
-    };
-    try {
-      const resp = await axios.post(url, payload);
-      const docs = (resp.data || [])
-        .map((item: any) => item.document)
-        .filter((doc: any) => doc && doc.name);
-      return docs;
-    } catch (err: any) {
-      console.warn("[SCHEDULER] Failed to query scheduled campaigns via runQuery, falling back to full collection scan:", err.message);
-      return fetchFirestoreCollection("emailCampaigns");
-    }
-  }
-
-  async function fetchPendingSubscribers(): Promise<any[]> {
-    const url = `${getFirestoreUrl()}:runQuery${getApiKeyParam()}`;
-    const payload = {
-      structuredQuery: {
-        from: [{ collectionId: "subscribers" }],
-        where: {
-          fieldFilter: {
-            field: { fieldPath: "status" },
-            op: "EQUAL",
-            value: { stringValue: "pending" }
-          }
-        }
-      }
-    };
-    try {
-      const resp = await axios.post(url, payload);
-      const docs = (resp.data || [])
-        .map((item: any) => item.document)
-        .filter((doc: any) => doc && doc.name);
-      return docs;
-    } catch (err: any) {
-      console.warn("[CLEANER] Failed to query pending subscribers via runQuery, falling back to full collection scan:", err.message);
-      return fetchFirestoreCollection("subscribers");
-    }
+    const { data } = await supabase.from('email_campaigns').select('*').eq('status', 'scheduled');
+    return data || [];
   }
 
   async function checkAndSendScheduledCampaigns() {
@@ -1596,31 +1166,29 @@ async function startServer() {
       return; // Gmail is not connected yet
     }
 
-    let documents: any[];
+    let campaigns: any[];
     try {
-      documents = await fetchScheduledCampaigns();
+      campaigns = await fetchScheduledCampaigns();
     } catch (err: any) {
       console.error("[SCHEDULER] Error fetching campaigns for checklist:", err.message);
       return;
     }
 
-    if (documents.length === 0) {
+    if (campaigns.length === 0) {
       return;
     }
 
-    for (const doc of documents) {
-      const id = doc.name.split("/").pop();
-      if (!id) continue;
-      const campaign = fromFirestoreJSON(doc);
-      if (!campaign || activeScheduledSends.has(id)) continue;
+    for (const campaign of campaigns) {
+      const id = campaign.id;
+      if (!id || activeScheduledSends.has(id)) continue;
 
       // Check if campaign is scheduled and is past scheduled date-time
-      if (campaign.status === "scheduled" && campaign.scheduledAt) {
-        const schedTime = new Date(campaign.scheduledAt).getTime();
+      if (campaign.status === "scheduled" && campaign.scheduled_at) {
+        const schedTime = new Date(campaign.scheduled_at).getTime();
         const nowTime = Date.now();
 
         if (!isNaN(schedTime) && schedTime <= nowTime) {
-          console.log(`[SCHEDULER] Campaign detected for sending: "${campaign.title}" (${id}), scheduled for ${campaign.scheduledAt}`);
+          console.log(`[SCHEDULER] Campaign detected for sending: "${campaign.title}" (${id}), scheduled for ${campaign.scheduled_at}`);
           activeScheduledSends.add(id);
 
           // Mark as sending in DB immediately to prevent duplicate runs
@@ -1638,54 +1206,25 @@ async function startServer() {
       const accessToken = await getOrRefreshAccessToken(config);
 
       // Extract recipient tags from campaign
-      let recipientTags: string[] = [];
-      if (campaign.recipientTags) {
-        if (Array.isArray(campaign.recipientTags)) {
-          recipientTags = campaign.recipientTags;
-        } else if (typeof campaign.recipientTags === 'string') {
-          try {
-            recipientTags = JSON.parse(campaign.recipientTags);
-          } catch (e) {
-            recipientTags = [];
-          }
-        }
-      }
+      const recipientTags: string[] = Array.isArray(campaign.recipient_tags) ? campaign.recipient_tags : [];
 
-      // Fetch subscribers from Firestore REST API
-      const allDocs = await fetchFirestoreCollection("subscribers");
-      const subscribers = allDocs.map((d: any) => {
-        const sId = d.name.split("/").pop();
-        return { id: sId, ...fromFirestoreJSON(d) };
-      });
+      // Fetch subscribers from Supabase
+      const { data: subscribers } = await supabase.from('subscribers').select('*');
+      const allSubscribers = subscribers || [];
 
       // Filter active and matching subscribers
-      const activeFilteredSubscribers = subscribers.filter((s: any) => {
+      const activeFilteredSubscribers = allSubscribers.filter((s: any) => {
         if (s.status !== "active") return false;
-        if (recipientTags.length === 0) return true; // All Active Subscribers
-        
-        let subTags: string[] = [];
-        if (Array.isArray(s.tags)) {
-          subTags = s.tags;
-        } else if (typeof s.tags === 'string') {
-          try {
-            subTags = JSON.parse(s.tags);
-          } catch (e) {
-            subTags = s.tags.split(',').map((t: string) => t.trim());
-          }
-        }
+        if (recipientTags.length === 0) return true;
+        const subTags: string[] = Array.isArray(s.tags) ? s.tags : [];
         return subTags.some((t: string) => recipientTags.some((rt: string) => rt.trim().toLowerCase() === t.trim().toLowerCase()));
       });
 
       console.log(`[SCHEDULER] Filtered ${activeFilteredSubscribers.length} active subscribers for scheduled campaign "${campaign.title}"`);
 
-      let attachments: any[] = [];
-      if (campaign.attachmentsJson) {
-        try {
-          attachments = JSON.parse(campaign.attachmentsJson);
-        } catch (e) {
-          console.error("[SCHEDULER] Error parsing campaign attachmentsJson:", e);
-        }
-      }
+      const attachments: any[] = Array.isArray(campaign.attachments_json)
+        ? campaign.attachments_json
+        : (campaign.attachments_json ? (() => { try { return JSON.parse(campaign.attachments_json); } catch(e) { return []; } })() : []);
 
       let sentCount = 0;
       let failedCount = 0;
@@ -1724,7 +1263,7 @@ async function startServer() {
 
         try {
           body = injectTrackingToBody(body, campaignId, rec.email, lastSeenHostUrl);
-          const rawMessage = buildMimeMessage(rec.email, config.authorizedEmail, subject, body, attachments);
+          const rawMessage = buildMimeMessage(rec.email, config.authorized_email, subject, body, attachments);
           const sendResp = await axios.post(
             "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
             { raw: rawMessage },
@@ -1754,8 +1293,8 @@ async function startServer() {
       }
 
       await updateCampaignCount(campaignId, 'sent', sentCount, failedCount);
-      if (campaign && campaign.importedPostId) {
-        await updateImportedPostStatus(campaign.importedPostId, 'authorized');
+      if (campaign && campaign.imported_post_id) {
+        await updateImportedPostStatus(campaign.imported_post_id, 'authorized');
       }
       console.log(`[SCHEDULER] Scheduled campaign "${campaign.title}" successfully completed! Sent: ${sentCount}, Failed: ${failedCount}`);
     } catch (err: any) {
@@ -1768,20 +1307,17 @@ async function startServer() {
 
   async function cleanExpiredPendingSubscribers() {
     try {
-      const allDocs = await fetchPendingSubscribers();
-      const subscribers = allDocs.map((d: any) => {
-        const sId = d.name.split("/").pop();
-        return { id: sId, ...fromFirestoreJSON(d) };
-      });
+      const { data: subscribers } = await supabase
+        .from('subscribers')
+        .select('id, email, verification_expires_at')
+        .eq('status', 'pending');
 
       const now = new Date();
-      for (const sub of subscribers) {
-        if (sub.status === "pending" && sub.verificationExpiresAt) {
-          const expiresAt = new Date(sub.verificationExpiresAt);
+      for (const sub of (subscribers || [])) {
+        if (sub.verification_expires_at) {
+          const expiresAt = new Date(sub.verification_expires_at);
           if (!isNaN(expiresAt.getTime()) && expiresAt < now) {
-            // Remove from active/pending subscribers as they failed to verify within 24hr window
-            const deleteUrl = getFirestoreRestUrl(`subscribers/${sub.id}`);
-            await axios.delete(deleteUrl);
+            await supabase.from('subscribers').delete().eq('id', sub.id);
             console.log(`[CLEANER] Automatically removed expired pending subscriber: ${sub.email} (${sub.id})`);
           }
         }
@@ -1811,48 +1347,29 @@ async function startServer() {
 
   let viteInstance: any = null;
 
-  const getDynamicFirebaseConfigScript = () => {
-    const config = {
-      apiKey: process.env.VITE_FIREBASE_API_KEY || "",
-      authDomain: process.env.VITE_FIREBASE_AUTH_DOMAIN || `${process.env.VITE_FIREBASE_PROJECT_ID}.firebaseapp.com`,
-      projectId: process.env.VITE_FIREBASE_PROJECT_ID || "",
-      storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET || `${process.env.VITE_FIREBASE_PROJECT_ID}.appspot.com`,
-      messagingSenderId: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
-      appId: process.env.VITE_FIREBASE_APP_ID || "",
-      databaseId: process.env.VITE_FIREBASE_DATABASE_ID || "(default)",
-    };
-    return `<script>
-      window.__FIREBASE_CONFIG__ = ${JSON.stringify(config)};
-    </script>`;
-  };
-
-  // Intercept HTML requests to inject real-time environment variables dynamic config
+  // Serve HTML routes (Vite or production dist)
   app.use(async (req, res, next) => {
     if (req.path.startsWith("/api/")) {
       return next();
     }
 
-    // Is it an HTML route or root navigation?
     if (req.path === "/" || req.path === "/index.html" || (!req.path.includes(".") && req.headers.accept?.includes("text/html"))) {
       try {
         const isDev = process.env.NODE_ENV !== "production";
-        const templatePath = isDev 
-          ? path.join(process.cwd(), 'index.html') 
+        const templatePath = isDev
+          ? path.join(process.cwd(), 'index.html')
           : path.join(process.cwd(), 'dist', 'index.html');
-        
+
         let html = await fs.promises.readFile(templatePath, "utf-8");
-        
+
         if (isDev && viteInstance) {
           html = await viteInstance.transformIndexHtml(req.url, html);
         }
-        
-        const configScript = getDynamicFirebaseConfigScript();
-        html = html.replace("<head>", `<head>\n    ${configScript}`);
-        
+
         res.setHeader("Content-Type", "text/html");
         return res.status(200).send(html);
       } catch (err: any) {
-        console.error("Error serving index.html dynamically:", err.message);
+        console.error("Error serving index.html:", err.message);
       }
     }
     next();

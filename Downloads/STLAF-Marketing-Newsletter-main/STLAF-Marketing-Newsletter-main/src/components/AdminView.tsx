@@ -43,9 +43,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Cloud, RefreshCw, Users as UsersIcon, UserCog, Upload, Mail as MailIcon } from 'lucide-react';
 import { RoleManager } from './RoleManager';
 import { SUPPORTED_SOCIAL_PLATFORMS } from '../constants';
-import { collection, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc, arrayUnion, limit } from 'firebase/firestore';
-import { db } from '../firebase';
+import { supabase } from '../supabase';
 import toast from 'react-hot-toast';
+
 
 export const AdminView = ({ 
   notificationSettings,
@@ -176,21 +176,31 @@ export const AdminView = ({
   }, [socialLinks]);
 
   useEffect(() => {
-    const q = query(
-      collection(db, 'concerns'),
-      orderBy('timestamp', 'desc'),
-      limit(50)
-    );
+    const loadInitial = async () => {
+      const { data } = await supabase
+        .from('concerns')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(50);
+      setConcerns((data || []).map(row => ({
+        id: row.id,
+        subject: row.subject,
+        messages: row.messages || [],
+        status: row.status,
+        userId: row.user_id,
+        userEmail: row.user_email,
+        userName: row.user_name,
+        timestamp: row.created_at  // ISO string
+      })));
+    };
+    loadInitial();
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const entries = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setConcerns(entries);
-    });
+    const channel = supabase
+      .channel('admin-concerns-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'concerns' }, loadInitial)
+      .subscribe();
 
-    return () => unsubscribe();
+    return () => { supabase.removeChannel(channel); };
   }, [refreshKey]);
 
   const handleUpdateQuickLinks = async () => {
@@ -230,10 +240,18 @@ export const AdminView = ({
         timestamp: new Date().toISOString()
       };
 
-      await updateDoc(doc(db, 'concerns', concernId), {
-        messages: arrayUnion(newMessage),
+      const { data: current, error: fetchError } = await supabase
+        .from('concerns').select('messages').eq('id', concernId).maybeSingle();
+      if (fetchError) throw fetchError;
+
+      const updatedMessages = [...(current?.messages || []), newMessage];
+
+      const { error } = await supabase.from('concerns').update({
+        messages: updatedMessages,
         status: 'reviewed'
-      });
+      }).eq('id', concernId);
+      if (error) throw error;
+
       toast.success("Reply sent successfully.");
       setReplyingTo(null);
       setReplyText('');
@@ -411,7 +429,8 @@ export const AdminView = ({
                                               onClick={async (e) => {
                                                 e.stopPropagation();
                                                 try {
-                                                  await updateDoc(doc(db, 'concerns', item.id), { status: 'resolved' });
+                                                  const { error } = await supabase.from('concerns').update({ status: 'resolved' }).eq('id', item.id);
+                                                  if (error) throw error;
                                                   toast.success("Concern marked as resolved.");
                                                 } catch (err) {
                                                   toast.error("Failed to update status.");
@@ -432,7 +451,8 @@ export const AdminView = ({
                                                 onClick={async (e) => {
                                                   e.stopPropagation();
                                                   try {
-                                                    await deleteDoc(doc(db, 'concerns', item.id));
+                                                    const { error } = await supabase.from('concerns').delete().eq('id', item.id);
+                                                    if (error) throw error;
                                                     toast.success("Record deleted.");
                                                     setIsDeleting(null);
                                                   } catch (err) {

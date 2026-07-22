@@ -49,10 +49,9 @@ import {
   HelpCircle,
   ArrowLeft
 } from 'lucide-react';
-import { collection, getDocs, addDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { db, auth, storage } from '../firebase';
+import { supabase } from '../supabase';
 import { EmailCampaign, Subscriber, EmailTemplate } from '../types';
+
 import { toast } from 'react-hot-toast';
 import axios from 'axios';
 import { sendInAppNotification } from '../services/notificationService';
@@ -291,16 +290,23 @@ export const ComposeCampaignView: React.FC<ComposeCampaignViewProps> = ({ onNavi
     // Fetch subscribers to get all tags and determine recipient counts
     const fetchSubscribersAndTemplates = async () => {
       try {
-        const subSnapshot = await getDocs(collection(db, 'subscribers'));
+        const { data: subData } = await supabase.from('subscribers').select('*');
         const subList: Subscriber[] = [];
         const tagsSet = new Set<string>();
-        subSnapshot.forEach(doc => {
-          const s = doc.data() as Subscriber;
-          const parsedTags = parseTags(s.tags);
-          subList.push({ ...s, tags: parsedTags, id: doc.id });
-          
+        (subData || []).forEach(row => {
+          const parsedTags = parseTags(row.tags);
+          subList.push({
+            id: row.id,
+            name: row.name,
+            email: row.email,
+            status: row.status,
+            tags: parsedTags,
+            addedAt: row.added_at,
+            addedBy: row.added_by
+          } as Subscriber);
+
           // Only pull targeting tags from currently active subscribers
-          if (s.status === 'active') {
+          if (row.status === 'active') {
             parsedTags.forEach(t => {
               if (t && t.trim()) {
                 tagsSet.add(formatTagDisplay(t));
@@ -320,11 +326,16 @@ export const ComposeCampaignView: React.FC<ComposeCampaignViewProps> = ({ onNavi
         setSubscribers(subList);
         setAvailableTags(uniqueTags);
 
-        const tempSnapshot = await getDocs(collection(db, 'emailTemplates'));
-        const tempList: EmailTemplate[] = [];
-        tempSnapshot.forEach(doc => {
-          tempList.push({ ...(doc.data() as EmailTemplate), id: doc.id });
-        });
+        const { data: tempData } = await supabase.from('email_templates').select('*');
+        const tempList: EmailTemplate[] = (tempData || []).map(row => ({
+          id: row.id,
+          name: row.name,
+          subject: row.subject,
+          body: row.body,
+          category: row.category || 'Newsletter',
+          createdBy: row.created_by,
+          createdAt: row.created_at
+        }));
         setTemplates(tempList);
       } catch (e) {
         console.error("Error loaded composition references", e);
@@ -448,10 +459,11 @@ export const ComposeCampaignView: React.FC<ComposeCampaignViewProps> = ({ onNavi
     if (importedPostId) {
       setLoading(true);
       try {
-        const postRef = doc(db, 'posts', importedPostId);
-        await updateDoc(postRef, {
-          mailStatus: 'cancelled'
-        });
+        // Only keep this block if you migrated the "posts" collection to a `posts` table
+        const { error } = await supabase.from('posts').update({
+          mail_status: 'cancelled'
+        }).eq('id', importedPostId);
+        if (error) throw error;
         toast.success("Campaign hand-off cancelled.");
       } catch (err) {
         console.error("Error setting request to cancelled:", err);
@@ -480,44 +492,48 @@ export const ComposeCampaignView: React.FC<ComposeCampaignViewProps> = ({ onNavi
 
     setLoading(true);
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+
       const campaignPayload = {
         title,
         subject,
         body,
         status: isSend ? (sendType === 'schedule' ? 'scheduled' : 'sending') : 'draft',
         type,
-        recipientTags,
-        scheduledAt: sendType === 'schedule' ? (scheduledAt ? new Date(scheduledAt).toISOString() : '') : '',
-        createdBy: initialCampaign?.createdBy || auth.currentUser?.email || 'System',
-        createdAt: initialCampaign?.createdAt || new Date().toISOString(),
-        attachmentsJson: JSON.stringify(attachments),
-        importedPostId: importedPostId || ''
+        recipient_tags: recipientTags,
+        scheduled_at: sendType === 'schedule' ? (scheduledAt ? new Date(scheduledAt).toISOString() : null) : null,
+        created_by: initialCampaign?.createdBy || user?.email || 'System',
+        attachments_json: JSON.stringify(attachments),
+        imported_post_id: importedPostId || null
       };
 
       let campaignId = '';
 
       if (initialCampaign?.id) {
         campaignId = initialCampaign.id;
-        await updateDoc(doc(db, 'emailCampaigns', campaignId), campaignPayload);
+        const { error } = await supabase.from('email_campaigns').update(campaignPayload).eq('id', campaignId);
+        if (error) throw error;
       } else {
-        const docRef = await addDoc(collection(db, 'emailCampaigns'), {
+        const { data: created, error } = await supabase.from('email_campaigns').insert({
           ...campaignPayload,
-          sentCount: 0,
-          failedCount: 0
-        });
-        campaignId = docRef.id;
+          sent_count: 0,
+          failed_count: 0
+        }).select().single();
+        if (error) throw error;
+        campaignId = created.id;
       }
-      
+
       if (isSend) {
         if (sendType === 'schedule') {
           if (importedPostId) {
             try {
-              const postRef = doc(db, 'posts', importedPostId);
-              await updateDoc(postRef, {
-                mailStatus: 'scheduled',
-                mailSentTime: serverTimestamp(),
-                mailScheduledTime: scheduledAt ? new Date(scheduledAt).toISOString() : new Date().toISOString()
-              });
+              // Only keep this block if you migrated the "posts" collection to a `posts` table
+              const { error: postErr } = await supabase.from('posts').update({
+                mail_status: 'scheduled',
+                mail_sent_time: new Date().toISOString(),
+                mail_scheduled_time: scheduledAt ? new Date(scheduledAt).toISOString() : new Date().toISOString()
+              }).eq('id', importedPostId);
+              if (postErr) console.error("Error updating handoff post:", postErr);
             } catch (err) {
               console.error("Error updating handoff post:", err);
             }
@@ -530,14 +546,13 @@ export const ComposeCampaignView: React.FC<ComposeCampaignViewProps> = ({ onNavi
           toast.success("Campaign scheduled successfully!");
           onNavigate('campaigns');
         } else {
-          // Bulk send directly in background
           if (importedPostId) {
             try {
-              const postRef = doc(db, 'posts', importedPostId);
-              await updateDoc(postRef, {
-                mailStatus: 'authorized',
-                mailSentTime: serverTimestamp()
-              });
+              const { error: postErr } = await supabase.from('posts').update({
+                mail_status: 'authorized',
+                mail_sent_time: new Date().toISOString()
+              }).eq('id', importedPostId);
+              if (postErr) console.error("Error updating handoff post:", postErr);
             } catch (err) {
               console.error("Error updating handoff post:", err);
             }
@@ -549,7 +564,6 @@ export const ComposeCampaignView: React.FC<ComposeCampaignViewProps> = ({ onNavi
           });
           toast.success("Launching bulk campaign send!");
           onNavigate('campaigns');
-          // Call client API async
           axios.post('/api/gmail/send-bulk', {
             campaignId: campaignId,
             recipients: activeFilteredSubscribers.map(s => ({ email: s.email, name: s.name }))

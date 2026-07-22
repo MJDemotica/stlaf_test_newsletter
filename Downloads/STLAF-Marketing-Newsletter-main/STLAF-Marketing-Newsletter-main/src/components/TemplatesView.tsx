@@ -17,9 +17,21 @@ import {
   Sparkles, 
   Eye 
 } from 'lucide-react';
-import { collection, onSnapshot, doc, setDoc, addDoc, deleteDoc } from 'firebase/firestore';
-import { db, auth } from '../firebase';
+import { supabase } from '../supabase';
 import { EmailTemplate } from '../types';
+
+function mapTemplate(row: any): EmailTemplate {
+  return {
+    id: row.id,
+    name: row.name,
+    subject: row.subject,
+    body: row.body,
+    category: row.category || 'Newsletter',
+    createdBy: row.created_by,
+    createdAt: row.created_at
+  };
+}
+
 import { toast } from 'react-hot-toast';
 import { ConfirmationModal } from './ConfirmationModal';
 
@@ -45,16 +57,22 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({ onNavigate }) => {
   const [deleteTemplateId, setDeleteTemplateId] = useState<string | null>(null);
 
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'emailTemplates'), (snapshot) => {
-      const list: EmailTemplate[] = [];
-      snapshot.forEach(doc => {
-        list.push({ ...(doc.data() as EmailTemplate), id: doc.id });
-      });
-      list.sort((a,b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      setTemplates(list);
+    const loadInitial = async () => {
+      const { data } = await supabase
+        .from('email_templates')
+        .select('*')
+        .order('created_at', { ascending: false });
+      setTemplates((data || []).map(mapTemplate));
       setLoading(false);
-    });
-    return () => unsub();
+    };
+    loadInitial();
+
+    const channel = supabase
+      .channel('templates-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'email_templates' }, loadInitial)
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, []);
 
   const openAddModal = () => {
@@ -85,24 +103,18 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({ onNavigate }) => {
 
     try {
       if (editingTemplate) {
-        await setDoc(doc(db, 'emailTemplates', editingTemplate.id), {
-          name,
-          subject,
-          body,
-          category,
-          createdBy: editingTemplate.createdBy,
-          createdAt: editingTemplate.createdAt
-        });
+        const { error } = await supabase.from('email_templates').update({
+          name, subject, body, category
+        }).eq('id', editingTemplate.id);
+        if (error) throw error;
         toast.success("Template updated!");
       } else {
-        await addDoc(collection(db, 'emailTemplates'), {
-          name,
-          subject,
-          body,
-          category,
-          createdBy: auth.currentUser?.email || 'System',
-          createdAt: new Date().toISOString()
+        const { data: { user } } = await supabase.auth.getUser();
+        const { error } = await supabase.from('email_templates').insert({
+          name, subject, body, category,
+          created_by: user?.email || 'System'
         });
+        if (error) throw error;
         toast.success("Template created!");
       }
       setShowModal(false);
@@ -119,7 +131,8 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({ onNavigate }) => {
   const handleConfirmDelete = async () => {
     if (!deleteTemplateId) return;
     try {
-      await deleteDoc(doc(db, 'emailTemplates', deleteTemplateId));
+      const { error } = await supabase.from('email_templates').delete().eq('id', deleteTemplateId);
+      if (error) throw error;
       toast.success("Template deleted successfully");
       setDeleteTemplateId(null);
     } catch (err: any) {
